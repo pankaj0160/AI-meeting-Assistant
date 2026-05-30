@@ -105,7 +105,7 @@ SUMMLY/
 ### 1. Clone Repository
 
 ```bash
-git clone [https://github.com/pankaj0160/summly](https://github.com/pankaj0160/AI-meeting-Assistant.git
+git clone https://github.com/pankaj0160/summly](https://github.com/pankaj0160/AI-meeting-Assistant.git
 
 cd AI-meeting-Assistant
 ```
