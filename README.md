@@ -264,3 +264,6 @@ Upcoming features:
 Pankaj Thakur
 
 Built as part of an AI Engineering project focused on practical applications of LLMs, speech-to-text systems, and full-stack AI development.
+
+## License
+MIT
