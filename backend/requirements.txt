@@ -1,0 +1,14 @@
+openai-whisper
+torch
+yt-dlp
+
+fastapi
+uvicorn
+python-multipart
+
+ffmpeg-python
+
+numpy
+tqdm
+
+python-dotenv
