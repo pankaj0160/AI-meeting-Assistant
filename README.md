@@ -105,9 +105,9 @@ SUMMLY/
 ### 1. Clone Repository
 
 ```bash
-git clone https://github.com/pankaj0160/summly.git
+git clone [https://github.com/pankaj0160/summly](https://github.com/pankaj0160/AI-meeting-Assistant.git
 
-cd summly
+cd AI-meeting-Assistant
 ```
 
 ### 2. Create Virtual Environment
