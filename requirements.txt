@@ -1,0 +1,26 @@
+openai-whisper
+torch
+yt-dlp
+
+fastapi
+uvicorn
+python-multipart
+
+ffmpeg-python
+
+numpy
+tqdm
+
+python-dotenv
+
+streamlit
+requests
+
+
+
+ groq
+langgraph
+langchain-core
+langchain-groq
+pydantic>=2.0
+python-dotenv
