@@ -2,7 +2,8 @@
 
 AI Meeting Intelligence Platform that transforms audio, video, and YouTube recordings into searchable transcripts.
 
-<img width="1821" height="844" alt="SC1" src="https://github.com/user-attachments/assets/803828b2-4bf4-4d81-b627-0e78cb313477" />
+<img width="1815" height="715" alt="image" src="https://github.com/user-attachments/assets/b688f8a9-4fed-4601-bd78-387264feaef5" />
+
 
 ---
 
@@ -204,10 +205,9 @@ http://localhost:8501
 
 ### Dashboard
 
+<img width="1815" height="715" alt="image" src="https://github.com/user-attachments/assets/b688f8a9-4fed-4601-bd78-387264feaef5" />
+<img width="1794" height="882" alt="image" src="https://github.com/user-attachments/assets/6a7cd174-9569-4d9f-9e61-4a1be0dcb186" />
 
-<img width="1821" height="844" alt="SC1" src="https://github.com/user-attachments/assets/4daaabcc-2ff6-47ac-9bc5-5161d522e191" />
-
-<img width="1774" height="862" alt="SC2" src="https://github.com/user-attachments/assets/f28a687a-2779-4704-ad1b-e658cd77f35e" />
 
 
 ## 🧪 Example Workflow
