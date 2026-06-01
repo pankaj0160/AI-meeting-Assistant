@@ -201,7 +201,7 @@ http://localhost:8501
 
 ---
 
-## 📸 Screenshots
+## 📸 Working Screenshots
 
 ### Dashboard
 
