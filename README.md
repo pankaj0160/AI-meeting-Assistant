@@ -1,4 +1,4 @@
-# 🎙️ Summly - AI Assistant
+# 🎙️ Summly - AI Meeting Assistant
 
 AI Meeting Intelligence Platform that transforms audio, video, and YouTube recordings into searchable transcripts.
 
