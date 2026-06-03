@@ -733,9 +733,12 @@ export default function Landing() {
             {[
               { label: 'Features', href: '#features' },
               { label: 'Demo',     href: '/demo'     },
+              { label: 'Creator',  href: '/creator'  },
+              { label: 'Support',  href: '/support'  },
               { label: 'Sign In',  href: '/login'    },
               { label: 'Register', href: '/register' },
             ].map(l => (
+                
               <a key={l.label} href={l.href} style={{
                 fontSize: '14px', color: T.text3,
                 fontWeight: 500, textDecoration: 'none',

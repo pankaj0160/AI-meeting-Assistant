@@ -3,6 +3,8 @@ Summly FastAPI Backend
 Phase 2 Complete with Meeting Intelligence Engine
 """
 
+
+import datetime
 from core.auth.dependencies import get_current_user, get_optional_user
 from core.auth.models import User
 from typing import Optional
@@ -75,6 +77,12 @@ app.include_router(auth_router)
 # =====================================================
 # REQUEST MODELS
 # =====================================================
+
+class ContactRequest(BaseModel):
+    name:    str
+    email:   str
+    subject: str
+    message: str
 
 class YouTubeRequest(BaseModel):
     url: HttpUrl
@@ -853,6 +861,53 @@ async def youtube_with_progress(
         intelligence    = get_intelligence_for_response(meeting_id),
         processing_time = processing_time,
     )
+
+
+# =====================================================
+# CONTACT ENDPOINT
+# =====================================================
+
+@app.post("/contact", tags=["Support"])
+async def contact(request: ContactRequest):
+    """
+    Saves contact form submission.
+    In production: send via SMTP or Resend.
+    For now: logs and saves to a local file.
+    """
+    import json
+    from pathlib import Path
+
+    try:
+        entry = {
+            "name":    request.name,
+            "email":   request.email,
+            "subject": request.subject,
+            "message": request.message,
+            "sent_at": datetime.datetime.now().isoformat(),
+        }
+
+        # Save to contact_submissions.json
+        path = Path("contact_submissions.json")
+        submissions = []
+        if path.exists():
+            try:
+                submissions = json.loads(path.read_text())
+            except Exception:
+                submissions = []
+
+        submissions.append(entry)
+        path.write_text(json.dumps(submissions, indent=2))
+
+        logger.info(f"Contact form: {request.name} <{request.email}> — {request.subject}")
+
+        return {"message": "Message received. We'll get back to you soon."}
+
+    except Exception as e:
+        logger.error(f"Contact form failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to send message")
+
+
+
 
 
 # =====================================================

@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import Layout from './components/Layout'
 import ProtectedRoute from './components/ProtectedRoute'
+import Support from './pages/Support'
 
 // Public pages
 import Landing        from './pages/Landing'
@@ -33,6 +34,7 @@ export default function App() {
         <Route path="/login"         element={<Login />}          />
         <Route path="/register"      element={<Register />}       />
         <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/support" element={<Support />} />
 
         {/* ── Protected app routes ── */}
         <Route path="/app" element={

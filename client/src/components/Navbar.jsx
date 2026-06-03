@@ -16,7 +16,7 @@ export default function Navbar() {
     { label: 'Features', href: '/#features' },
     { label: 'Demo',     href: '/demo'      },
     { label: 'Creator',  href: '/creator'   },
-    { label: 'FAQ',      href: '/#faq'      },
+    { label: 'Support',  href: '/support'   },
   ]
 
   return (

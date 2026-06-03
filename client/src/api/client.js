@@ -167,3 +167,13 @@ export async function getHealth() {
 export async function reindexAll() {
   return request('/rag/reindex', { method: 'POST' })
 }
+
+
+// ── Contact ───────────────────────────────────────────────────────────────────
+
+export async function sendContactForm(name, email, subject, message) {
+  return request('/contact', {
+    method: 'POST',
+    body: JSON.stringify({ name, email, subject, message }),
+  })
+}
