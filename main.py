@@ -2,7 +2,9 @@
 Summly FastAPI Backend
 Phase 2 Complete with Meeting Intelligence Engine
 """
-
+from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect, Query
+from fastapi import WebSocket, WebSocketDisconnect
+import asyncio
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,9 +14,9 @@ import shutil
 import time
 import logging
 
-from core.audio_extractor import extract_audio
-from core.transcribe import transcribe_audio
-from core.youtube_downloader import download_youtube
+from core.transcription.audio_extractor import extract_audio
+from core.transcription.transcribe import transcribe_audio
+from core.transcription.youtube_downloader import download_youtube
 
 from core.database import (
     init_db,
@@ -26,6 +28,8 @@ from core.database import (
 )
 
 from core.intelligence.workflow import analyze_transcript
+from core.rag.indexer import index_meeting
+from core.rag.chat import chat_with_meeting, chat_across_meetings
 
 # =====================================================
 # LOGGING
@@ -73,6 +77,11 @@ class YouTubeRequest(BaseModel):
                 "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
             }
         }
+
+class ChatRequest(BaseModel):
+    query: str
+    meeting_id: int | None = None
+
 
 # =====================================================
 # RESPONSE MODELS
@@ -269,11 +278,23 @@ async def upload_file(file: UploadFile = File(...)):
         logger.info(f"Generating intelligence for meeting {meeting_id}...")
         intelligence = analyze_transcript(transcript)
         
-        # Save intelligence
+# Save intelligence
         save_meeting_intelligence(meeting_id, intelligence)
         logger.info(f"Intelligence saved: {len(intelligence.action_items)} items, "
                     f"{len(intelligence.decisions)} decisions, {len(intelligence.topics)} topics")
-        
+
+        # Index into ChromaDB for RAG
+        try:
+            index_meeting(
+                meeting_id=meeting_id,
+                filename=file.filename,
+                transcript=transcript,
+                created_at="",
+            )
+            logger.info(f"ChromaDB indexed for meeting {meeting_id}")
+        except Exception as e:
+            logger.warning(f"ChromaDB indexing failed (non-fatal): {e}")
+
         # Save transcript to file
         transcript_file = TRANSCRIPT_DIR / f"{Path(file.filename).stem}.txt"
         with open(transcript_file, "w", encoding="utf-8") as f:
@@ -341,11 +362,23 @@ async def process_youtube(request: YouTubeRequest):
         logger.info(f"Generating intelligence for meeting {meeting_id}...")
         intelligence = analyze_transcript(transcript)
         
-        # Save intelligence
+# Save intelligence
         save_meeting_intelligence(meeting_id, intelligence)
         logger.info(f"Intelligence saved: {len(intelligence.action_items)} items, "
                     f"{len(intelligence.decisions)} decisions, {len(intelligence.topics)} topics")
-        
+
+        # Index into ChromaDB for RAG
+        try:
+            index_meeting(
+                meeting_id=meeting_id,
+                filename=title,
+                transcript=transcript,
+                created_at="",
+            )
+            logger.info(f"ChromaDB indexed for meeting {meeting_id}")
+        except Exception as e:
+            logger.warning(f"ChromaDB indexing failed (non-fatal): {e}")
+
         # Save transcript
         transcript_file = TRANSCRIPT_DIR / f"{title}.txt"
         with open(transcript_file, "w", encoding="utf-8") as f:
@@ -438,6 +471,344 @@ def meeting_intelligence(meeting_id: int):
     except Exception as e:
         logger.error(f"Failed to fetch intelligence for meeting {meeting_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch intelligence")
+    
+
+# =====================================================
+# CHAT ENDPOINTS
+# =====================================================
+
+@app.post("/chat/meeting", tags=["Chat"])
+def chat_meeting(request: ChatRequest):
+    """
+    Answer a question grounded in a single meeting.
+    Requires meeting_id in the request body.
+    """
+    if not request.meeting_id:
+        raise HTTPException(
+            status_code=400,
+            detail="meeting_id is required for single meeting chat"
+        )
+
+    try:
+        result = chat_with_meeting(
+            query=request.query,
+            meeting_id=request.meeting_id,
+        )
+        return {
+            "answer":     result["answer"],
+            "sources":    result["sources"],
+            "meeting_id": request.meeting_id,
+            "mode":       "single",
+        }
+    except Exception as e:
+        logger.error(f"Chat failed for meeting {request.meeting_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Chat failed: {str(e)}")
+
+
+@app.post("/chat/search", tags=["Chat"])
+def chat_search(request: ChatRequest):
+    """
+    Answer a question by searching across ALL meetings.
+    """
+    try:
+        result = chat_across_meetings(query=request.query)
+        return {
+            "answer":  result["answer"],
+            "sources": result["sources"],
+            "mode":    "cross",
+        }
+    except Exception as e:
+        logger.error(f"Cross-meeting chat failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Chat failed: {str(e)}")
+    
+
+# =====================================================
+# STATS ENDPOINT
+# =====================================================
+
+@app.get("/stats", tags=["System"])
+def get_stats():
+    """Aggregate stats across all meetings."""
+    try:
+        from core.database import get_all_transcripts, get_meeting_intelligence
+        meetings = get_all_transcripts()
+        total_meetings   = len(meetings)
+        total_decisions  = 0
+        total_actions    = 0
+        total_topics     = 0
+
+        for row in meetings:
+            meeting_id = row[0]
+            try:
+                intel = get_meeting_intelligence(meeting_id)
+                if intel:
+                    total_decisions += len(intel.get("decisions",    []))
+                    total_actions   += len(intel.get("action_items", []))
+                    total_topics    += len(intel.get("topics",       []))
+            except Exception:
+                pass
+
+        return {
+            "total_meetings":  total_meetings,
+            "total_decisions": total_decisions,
+            "total_actions":   total_actions,
+            "total_topics":    total_topics,
+        }
+    except Exception as e:
+        logger.error(f"Stats failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch stats")
+
+
+# =====================================================
+# REINDEX ENDPOINT
+# =====================================================
+
+@app.post("/rag/reindex", tags=["RAG"])
+def reindex_all():
+    """Re-index all meetings into ChromaDB."""
+    try:
+        from core.database import get_all_meetings_for_indexing
+        from core.rag.indexer import index_meeting
+        meetings = get_all_meetings_for_indexing()
+        indexed = 0
+        for m in meetings:
+            try:
+                index_meeting(
+                    meeting_id=m["id"],
+                    filename=m["filename"],
+                    transcript=m["transcript"],
+                    created_at=m["created_at"],
+                )
+                indexed += 1
+            except Exception as e:
+                logger.warning(f"Failed to index meeting {m['id']}: {e}")
+        return { "indexed": indexed, "total": len(meetings) }
+    except Exception as e:
+        logger.error(f"Reindex failed: {e}")
+        raise HTTPException(status_code=500, detail="Reindex failed")
+    
+
+# =====================================================
+# WEBSOCKET PROGRESS ENDPOINT
+# =====================================================
+
+class ProgressManager:
+    """
+    Manages active WebSocket connections keyed by job_id.
+    Each upload gets a unique job_id — frontend connects
+    before upload starts and receives live step updates.
+    """
+    def __init__(self):
+        self.connections: dict[str, WebSocket] = {}
+
+    async def connect(self, job_id: str, ws: WebSocket):
+        await ws.accept()
+        self.connections[job_id] = ws
+        logger.info(f"WebSocket connected: {job_id}")
+
+    def disconnect(self, job_id: str):
+        self.connections.pop(job_id, None)
+        logger.info(f"WebSocket disconnected: {job_id}")
+
+    async def send(self, job_id: str, data: dict):
+        ws = self.connections.get(job_id)
+        if ws:
+            try:
+                await ws.send_json(data)
+            except Exception:
+                self.disconnect(job_id)
+
+
+progress = ProgressManager()
+
+
+@app.websocket("/ws/progress/{job_id}")
+async def websocket_progress(websocket: WebSocket, job_id: str):
+    await progress.connect(job_id, websocket)
+    try:
+        # Keep connection alive until client disconnects
+        while True:
+            await asyncio.sleep(30)
+    except WebSocketDisconnect:
+        progress.disconnect(job_id)
+
+
+# =====================================================
+# UPLOAD WITH PROGRESS
+# =====================================================
+
+class ProgressRequest(BaseModel):
+    job_id: str
+
+async def _run_with_progress(job_id: str, filename: str, transcript_fn):
+    """
+    Shared progress-aware processing pipeline.
+    Sends step updates over WebSocket as each phase completes.
+    """
+    import datetime
+
+    async def step(name: str, message: str, pct: int):
+        await progress.send(job_id, {
+            "step":    name,
+            "message": message,
+            "pct":     pct,
+            "ts":      datetime.datetime.now().isoformat(),
+        })
+
+    try:
+        await step("extract",    "Extracting audio...",           10)
+        transcript = await asyncio.to_thread(transcript_fn)
+
+        await step("transcribe", "Transcription complete",        40)
+
+        meeting_id = await asyncio.to_thread(
+            save_transcript_and_get_id, filename, transcript
+        )
+
+        await step("intel",      "Generating meeting intelligence...", 60)
+        intelligence = await asyncio.to_thread(analyze_transcript, transcript)
+
+        await step("intel",      "Saving intelligence...",        75)
+        await asyncio.to_thread(save_meeting_intelligence, meeting_id, intelligence)
+
+        await step("index",      "Indexing for RAG search...",    88)
+        try:
+            await asyncio.to_thread(
+                index_meeting, meeting_id, filename, transcript, ""
+            )
+        except Exception as e:
+            logger.warning(f"Index failed (non-fatal): {e}")
+
+        await step("done",       "Processing complete!",          100)
+
+        return meeting_id, transcript, intelligence
+
+    except Exception as e:
+        await progress.send(job_id, {
+            "step":    "error",
+            "message": str(e),
+            "pct":     0,
+        })
+        raise
+
+
+@app.post("/upload/progress", tags=["Processing"])
+async def upload_file_with_progress(
+    file:   UploadFile = File(...),
+    job_id: str = Query(default=None),
+):
+    """
+    Upload endpoint that streams progress over WebSocket.
+    Pass job_id as a query param: /upload/progress?job_id=xyz
+    """
+    from fastapi import Query
+    start_time = time.time()
+    ext = file.filename.split(".")[-1].lower()
+
+    if ext in VIDEO_EXTENSIONS:
+        file_path = VIDEO_DIR / file.filename
+    elif ext in AUDIO_EXTENSIONS:
+        file_path = AUDIO_DIR / file.filename
+    else:
+        raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
+
+    try:
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Failed to save file")
+
+    file_size_mb = round(file_path.stat().st_size / (1024 * 1024), 2)
+
+    def do_transcribe():
+        if ext in VIDEO_EXTENSIONS:
+            wav = extract_audio(str(file_path))
+        else:
+            wav = str(file_path)
+        return transcribe_audio(wav)
+
+    meeting_id, transcript, intelligence = await _run_with_progress(
+        job_id   = job_id or "noop",
+        filename = file.filename,
+        transcript_fn = do_transcribe,
+    )
+
+    processing_time = round(time.time() - start_time, 2)
+
+    return TranscriptResponse(
+        meeting_id      = meeting_id,
+        filename        = file.filename,
+        transcript_file = "",
+        transcript      = transcript,
+        intelligence    = get_intelligence_for_response(meeting_id),
+        processing_time = processing_time,
+        file_size_mb    = file_size_mb,
+    )
+
+
+@app.post("/youtube/progress", tags=["Processing"])
+async def youtube_with_progress(request: dict, job_id: str = None):
+    """
+    YouTube endpoint that streams progress over WebSocket.
+    Pass job_id as query param: /youtube/progress?job_id=xyz
+    Body: { "url": "...", "job_id": "..." }
+    """
+    url    = request.get("url", "")
+    job_id = request.get("job_id") or job_id or "noop"
+    start_time = time.time()
+
+    def do_transcribe():
+        yt_data = download_youtube(str(url))
+        wav     = extract_audio(yt_data["audio_file"])
+        return transcribe_audio(wav), yt_data["title"]
+
+    # Run download+transcribe in thread
+    await progress.send(job_id, {
+        "step": "download", "message": "Downloading YouTube audio...", "pct": 8
+    })
+
+    try:
+        transcript_result = await asyncio.to_thread(do_transcribe)
+        transcript, title = transcript_result
+    except Exception as e:
+        await progress.send(job_id, {"step": "error", "message": str(e), "pct": 0})
+        raise HTTPException(status_code=500, detail=str(e))
+
+    await progress.send(job_id, {
+        "step": "transcribe", "message": "Transcription complete", "pct": 40
+    })
+
+    meeting_id = await asyncio.to_thread(save_transcript_and_get_id, title, transcript)
+
+    await progress.send(job_id, {
+        "step": "intel", "message": "Generating intelligence...", "pct": 60
+    })
+    intelligence = await asyncio.to_thread(analyze_transcript, transcript)
+    await asyncio.to_thread(save_meeting_intelligence, meeting_id, intelligence)
+
+    await progress.send(job_id, {
+        "step": "index", "message": "Indexing for RAG...", "pct": 88
+    })
+    try:
+        await asyncio.to_thread(index_meeting, meeting_id, title, transcript, "")
+    except Exception as e:
+        logger.warning(f"Index failed: {e}")
+
+    await progress.send(job_id, {
+        "step": "done", "message": "Processing complete!", "pct": 100
+    })
+
+    processing_time = round(time.time() - start_time, 2)
+
+    return YouTubeResponse(
+        meeting_id      = meeting_id,
+        title           = title,
+        transcript_file = "",
+        transcript      = transcript,
+        intelligence    = get_intelligence_for_response(meeting_id),
+        processing_time = processing_time,
+    )
+
 
 # =====================================================
 # ERROR HANDLERS

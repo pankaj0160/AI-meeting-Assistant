@@ -1,14 +1,15 @@
 from pathlib import Path
 
-from core.audio_extractor import extract_audio
-from core.transcribe import transcribe_audio
-from core.youtube_downloader import download_youtube
+from core.transcription.audio_extractor import extract_audio
+from core.transcription.transcribe import transcribe_audio
+from core.transcription.youtube_downloader import download_youtube
 from core.database import (
     init_db,
     save_transcript_and_get_id,
     save_meeting_intelligence,
 )
 from core.intelligence.workflow import analyze_transcript
+from core.rag.indexer import index_meeting
 
 
 # ─── Phase 2 internal helper ──────────────────────────────────────────────────
@@ -32,6 +33,18 @@ def _run_intelligence(meeting_id: int, transcript: str) -> None:
     except Exception as e:
         print(f"  ⚠ Intelligence analysis failed (transcript still saved): {e}")
 
+        # Phase 3 — index transcript into ChromaDB for RAG
+    try:
+        print("Step 4: Indexing transcript into ChromaDB...")
+        index_meeting(
+            meeting_id=meeting_id,
+            filename=filename,
+            transcript=transcript,
+            created_at=created_at,
+        )
+    except Exception as e:
+        print(f"  ⚠ ChromaDB indexing failed (transcript still saved): {e}")
+
 
 # ─── Phase 1 functions — extended but interface unchanged ─────────────────────
 
@@ -52,7 +65,7 @@ def process_video(video_file: str) -> str:
         transcript=transcript,
     )
 
-    _run_intelligence(meeting_id, transcript)
+    _run_intelligence(meeting_id, transcript, filename=Path(video_file).stem)
 
     return transcript
 
@@ -80,7 +93,7 @@ def process_youtube(url: str) -> str:
         transcript=transcript,
     )
 
-    _run_intelligence(meeting_id, transcript)
+    _run_intelligence(meeting_id, transcript, filename=youtube_data["title"])
 
     return transcript
 
@@ -112,3 +125,7 @@ if __name__ == "__main__":
 
     print("\n=== FINAL TRANSCRIPT ===\n")
     print(result)
+
+
+
+

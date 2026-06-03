@@ -292,3 +292,64 @@ def get_meeting_by_id(meeting_id: int) -> dict | None:
     return dict(
         zip(["id", "filename", "transcript", "created_at", "duration_seconds"], row)
     )
+
+
+# ─── Phase 3 — new function only, zero existing code changed ──────────────────
+ 
+def get_all_meetings_for_indexing() -> list[dict]:
+    """
+    Phase 3 — Fetch all meetings with the fields needed for RAG indexing.
+ 
+    WHY THIS FUNCTION EXISTS
+    ─────────────────────────
+    When you run the reindex script (to build ChromaDB from existing meetings),
+    you need to iterate over every meeting and feed each one to index_meeting().
+ 
+    This function is the data source for that script.
+ 
+    It only returns the fields index_meeting() needs:
+      - id            → meeting_id
+      - filename      → meeting_filename (for source citations)
+      - transcript    → the text to chunk and embed
+      - created_at    → meeting_date (for source citations)
+ 
+    It does NOT return the full transcript text in a heavy join —
+    just what's needed for RAG. This keeps memory usage low when
+    you have hundreds of meetings.
+ 
+    Returns:
+        List of dicts, each containing:
+        {
+            "id":         int,
+            "filename":   str,
+            "transcript": str,
+            "created_at": str,
+        }
+        Ordered by id ascending (oldest first) — so re-indexing is deterministic.
+ 
+    Used by:
+        core/rag/reindex.py   (Step 5 addition — batch re-index script)
+        POST /rag/reindex     (Step 5 addition — admin API endpoint)
+    """
+    conn = sqlite3.connect(DB_NAME)
+ 
+    rows = conn.execute(
+        """
+        SELECT id, filename, transcript, created_at
+        FROM meetings
+        ORDER BY id ASC
+        """
+    ).fetchall()
+ 
+    conn.close()
+ 
+    return [
+        {
+            "id":         row[0],
+            "filename":   row[1] or "",
+            "transcript": row[2] or "",
+            "created_at": row[3] or "",
+        }
+        for row in rows
+        if row[2]  # skip meetings with no transcript (shouldn't happen, but safe)
+    ]

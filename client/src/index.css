@@ -1,0 +1,95 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --font: 'Inter', system-ui, -apple-system, sans-serif;
+  --radius-sm:  6px;
+  --radius-md:  12px;
+  --radius-lg:  18px;
+  --radius-xl:  24px;
+  --ease:       cubic-bezier(0.4, 0, 0.2, 1);
+  --speed:      0.18s;
+}
+
+html { font-size: 16px; }
+
+body {
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  min-height: 100vh;
+  transition: background var(--speed) var(--ease),
+              color var(--speed) var(--ease);
+}
+
+a { text-decoration: none; color: inherit; }
+button { font-family: var(--font); }
+input, textarea { font-family: var(--font); }
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  border-radius: 99px;
+  background: rgba(120, 120, 180, 0.25);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(120, 120, 180, 0.45);
+}
+
+/* ── Animations ── */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes shimmer {
+  0%   { background-position: -600px 0; }
+  100% { background-position: 600px 0; }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.anim-fade-up {
+  animation: fadeUp 0.38s var(--ease) both;
+}
+.anim-fade-up-1 { animation-delay: 0.06s; }
+.anim-fade-up-2 { animation-delay: 0.12s; }
+.anim-fade-up-3 { animation-delay: 0.18s; }
+.anim-fade-up-4 { animation-delay: 0.24s; }
+.anim-fade-up-5 { animation-delay: 0.30s; }
+
+.anim-fade-in { animation: fadeIn 0.3s var(--ease) both; }
+
+/* ── Skeleton ── */
+.skeleton {
+  border-radius: var(--radius-md);
+  background: linear-gradient(
+    90deg,
+    var(--skeleton-base) 25%,
+    var(--skeleton-shine) 50%,
+    var(--skeleton-base) 75%
+  );
+  background-size: 600px 100%;
+  animation: shimmer 1.4s infinite linear;
+}
+
+/* ── Spinner ── */
+.spinner {
+  width: 18px; height: 18px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  display: inline-block;
+}

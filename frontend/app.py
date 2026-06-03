@@ -40,6 +40,12 @@ if "selected_meeting_id" not in st.session_state:
 if "meetings_list" not in st.session_state:
     st.session_state.meetings_list = []
 
+if "chat_messages" not in st.session_state:
+    st.session_state.chat_messages = []
+
+if "chat_mode" not in st.session_state:
+    st.session_state.chat_mode = "single"
+
 # =====================================================
 # THEME DEFINITIONS
 # =====================================================
@@ -236,7 +242,7 @@ def status_badge(s):
 # =====================================================
 
 with st.sidebar:
-    
+
     # Logo + theme toggle
     col_logo, col_toggle = st.columns([3, 1])
     with col_logo:
@@ -251,7 +257,7 @@ with st.sidebar:
             AI Meeting Intelligence
         </p>
         """, unsafe_allow_html=True)
-    
+
     with col_toggle:
         st.markdown("<div style='margin-top:4px;'>", unsafe_allow_html=True)
         theme_icon = "☀️" if st.session_state.dark_mode else "🌙"
@@ -259,9 +265,9 @@ with st.sidebar:
             st.session_state.dark_mode = not st.session_state.dark_mode
             st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
-    
+
     st.markdown(f"<hr style='border-color:{T['border']};margin:16px 0;'>", unsafe_allow_html=True)
-    
+
     # Backend status
     online = backend_online()
     status_color = T["success"] if online else T["danger"]
@@ -274,14 +280,14 @@ with st.sidebar:
         <span style="font-size:13px;color:{status_color};font-weight:500;">{status_text}</span>
     </div>
     """, unsafe_allow_html=True)
-    
+
     # Past meetings
     st.markdown(f"""
     <p style="font-family:'Syne',sans-serif;font-size:12px;font-weight:700;
                color:{T['text3']};letter-spacing:0.1em;text-transform:uppercase;
                margin:0 0 10px 0;">Recent Meetings</p>
     """, unsafe_allow_html=True)
-    
+
     meetings = fetch_meetings()
     if meetings:
         for m in meetings[:8]:
@@ -291,7 +297,7 @@ with st.sidebar:
             is_sel = (st.session_state.selected_meeting_id == mid)
             bg = T["accent_glow"] if is_sel else "transparent"
             border = T["accent"] if is_sel else "transparent"
-            
+
             if st.button(
                 f"🎙 {fname}\n{cdate}",
                 key=f"view_{mid}",
@@ -306,9 +312,9 @@ with st.sidebar:
                 st.rerun()
     else:
         st.info("No meetings yet. Process one to get started.")
-    
+
     st.markdown(f"<hr style='border-color:{T['border']};margin:16px 0;'>", unsafe_allow_html=True)
-    
+
     # Features
     features = [
         ("✅", "File Upload"),
@@ -320,13 +326,13 @@ with st.sidebar:
         ("🚀", "Meeting Chat (Phase 3)"),
         ("🚀", "Cross-Meeting Search"),
     ]
-    
+
     st.markdown(f"""
     <p style="font-family:'Syne',sans-serif;font-size:12px;font-weight:700;
                color:{T['text3']};letter-spacing:0.1em;text-transform:uppercase;
                margin:0 0 10px 0;">Features</p>
     """, unsafe_allow_html=True)
-    
+
     for icon, label in features:
         color = T["text2"] if icon == "✅" else T["text3"]
         st.markdown(f"""
@@ -374,7 +380,7 @@ st.markdown(f"""
 # MAIN CONTENT TABS
 # =====================================================
 
-tab1, tab2 = st.tabs(["  📁  Upload File  ", "  🎥  YouTube URL  "])
+tab1, tab2, tab3 = st.tabs(["  📁  Upload File  ", "  🎥  YouTube URL  ", "  💬  Chat  "])
 
 # ── Upload Tab ──────────────────────────────────────
 
@@ -384,7 +390,7 @@ with tab1:
         type=["mp3", "mp4", "wav", "m4a", "webm", "mkv"],
         label_visibility="collapsed"
     )
-    
+
     if uploaded_file:
         st.markdown(f"""
         <div style="display:flex;align-items:center;gap:12px;padding:14px 18px;
@@ -397,7 +403,7 @@ with tab1:
             </div>
         </div>
         """, unsafe_allow_html=True)
-        
+
         if st.button("🚀 Transcribe & Analyze", key="upload_btn", use_container_width=True):
             with st.spinner("Processing your file..."):
                 try:
@@ -406,7 +412,7 @@ with tab1:
                         files={"file": (uploaded_file.name, uploaded_file, uploaded_file.type)},
                         timeout=300
                     )
-                    
+
                     if response.status_code == 200:
                         data = response.json()
                         st.session_state.transcript_text = data.get("transcript", "")
@@ -427,7 +433,7 @@ with tab2:
         placeholder="https://www.youtube.com/watch?v=...",
         label_visibility="collapsed"
     )
-    
+
     if st.button("🎥 Download & Analyze", key="yt_btn", use_container_width=True):
         if youtube_url:
             with st.spinner("Downloading and processing..."):
@@ -437,7 +443,7 @@ with tab2:
                         json={"url": youtube_url},
                         timeout=600
                     )
-                    
+
                     if response.status_code == 200:
                         data = response.json()
                         st.session_state.transcript_text = data.get("transcript", "")
@@ -460,15 +466,15 @@ transcript = st.session_state.transcript_text
 intel = st.session_state.intelligence_data
 
 if transcript:
-    
+
     # Metrics
     words = len(transcript.split())
     chars = len(transcript)
     mins = max(1, round(words / 150))
     sents = transcript.count(".") + transcript.count("?") + transcript.count("!")
-    
+
     st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
-    
+
     m1, m2, m3, m4 = st.columns(4)
     metrics = [
         (m1, words, "Words", "✍️"),
@@ -476,7 +482,7 @@ if transcript:
         (m3, chars, "Characters", "📝"),
         (m4, sents, "Sentences", "💬"),
     ]
-    
+
     for col, val, label, icon in metrics:
         with col:
             st.markdown(f"""
@@ -490,13 +496,13 @@ if transcript:
                              text-transform:uppercase;letter-spacing:0.06em;">{label}</div>
             </div>
             """, unsafe_allow_html=True)
-    
+
     st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
-    
+
     # Intelligence report + Transcript
     if intel:
         left, right = st.columns([3, 2], gap="large")
-        
+
         with left:
             st.markdown(f"""
             <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;">
@@ -505,7 +511,7 @@ if transcript:
                             margin:0;color:{T['text']};letter-spacing:-0.5px;">Intelligence Report</h2>
             </div>
             """, unsafe_allow_html=True)
-            
+
             # Summary
             st.markdown(f"""
             <div style="background:{T['surface']};padding:22px 24px;border-radius:16px;
@@ -520,7 +526,7 @@ if transcript:
                            font-weight:300;">{intel.get('summary','No summary.')}</p>
             </div>
             """, unsafe_allow_html=True)
-            
+
             # Topics
             topics = intel.get("topics", [])
             if topics:
@@ -530,7 +536,7 @@ if transcript:
                               margin:4px 4px 0 0;border:1px solid {T['border']};">
                     {t.get('title','')}
                 </span>""" for t in topics])
-                
+
                 st.markdown(f"""
                 <div style="background:{T['surface']};padding:22px 24px;border-radius:16px;
                             border:1px solid {T['border']};margin-bottom:16px;
@@ -543,7 +549,7 @@ if transcript:
                     <div>{tags}</div>
                 </div>
                 """, unsafe_allow_html=True)
-            
+
             # Decisions
             decisions = intel.get("decisions", [])
             if decisions:
@@ -560,7 +566,7 @@ if transcript:
                             </div>
                         </div>
                     </div>"""
-                
+
                 st.markdown(f"""
                 <div style="background:{T['surface']};padding:22px 24px;border-radius:16px;
                             border:1px solid {T['border']};margin-bottom:16px;
@@ -576,7 +582,7 @@ if transcript:
                     {decs}
                 </div>
                 """, unsafe_allow_html=True)
-            
+
             # Action Items
             items = intel.get("action_items", [])
             if items:
@@ -586,7 +592,7 @@ if transcript:
                     p_lbl = (item.get("priority") or "medium").title()
                     owner_html = f'<span style="font-size:12px;color:{T["text3"]};">👤 {item["owner"]}</span>' if item.get("owner") else ""
                     deadline_html = f'<span style="font-size:12px;color:{T["text3"]};">📅 {item["deadline"]}</span>' if item.get("deadline") else ""
-                    
+
                     rows += f"""
                     <div style="padding:13px 16px;border-radius:10px;margin-bottom:8px;
                                 background:{T['surface2']};border:1px solid {T['border']};">
@@ -607,7 +613,7 @@ if transcript:
                             </div>
                         </div>
                     </div>"""
-                
+
                 st.markdown(f"""
                 <div style="background:{T['surface']};padding:22px 24px;border-radius:16px;
                             border:1px solid {T['border']};box-shadow:{T['card_shadow']};">
@@ -622,7 +628,7 @@ if transcript:
                     {rows}
                 </div>
                 """, unsafe_allow_html=True)
-        
+
         # Right: Transcript
         with right:
             st.markdown(f"""
@@ -638,9 +644,9 @@ if transcript:
                 {transcript}
             </div>
             """, unsafe_allow_html=True)
-            
+
             st.markdown("<div style='height:12px;'></div>", unsafe_allow_html=True)
-            
+
             dl1, dl2 = st.columns(2)
             with dl1:
                 st.download_button(
@@ -656,7 +662,7 @@ if transcript:
                     "meeting_report.json",
                     "application/json"
                 )
-    
+
     else:
         st.markdown(f"""
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
@@ -670,9 +676,9 @@ if transcript:
             {transcript}
         </div>
         """, unsafe_allow_html=True)
-        
+
         st.markdown("<div style='height:12px;'></div>", unsafe_allow_html=True)
-        
+
         dc1, dc2, _ = st.columns([1, 1, 2])
         with dc1:
             st.download_button("📥 Transcript", transcript, "transcript.txt", "text/plain")
@@ -692,3 +698,166 @@ else:
         </p>
     </div>
     """, unsafe_allow_html=True)
+
+
+
+# =====================================================
+# CHAT TAB
+# =====================================================
+
+with tab3:
+
+    st.markdown(f"""
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:24px;">
+        <div style="width:4px;height:24px;background:{T['btn_grad']};border-radius:2px;"></div>
+        <h2 style="font-family:'Syne',sans-serif;font-weight:800;font-size:1.3rem;
+                    margin:0;color:{T['text']};">Meeting Chat</h2>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Mode selector ────────────────────────────────
+    mode_col, clear_col = st.columns([3, 1])
+
+    with mode_col:
+        chat_mode = st.radio(
+            "Search scope",
+            ["This Meeting", "All Meetings"],
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+        st.session_state.chat_mode = "single" if chat_mode == "This Meeting" else "cross"
+
+    with clear_col:
+        if st.button("🗑 Clear Chat", key="clear_chat"):
+            st.session_state.chat_messages = []
+            st.rerun()
+
+    # ── Single meeting warning ───────────────────────
+    if st.session_state.chat_mode == "single":
+        if not st.session_state.selected_meeting_id:
+            st.markdown(f"""
+            <div style="padding:14px 18px;background:{T['warning']}18;
+                        border:1px solid {T['warning']}44;border-radius:10px;
+                        color:{T['warning']};font-size:14px;margin-bottom:16px;">
+                ⚠️ No meeting selected. Pick one from the sidebar, or switch to <b>All Meetings</b> mode.
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div style="padding:10px 16px;background:{T['accent_glow']};
+                        border:1px solid {T['border2']};border-radius:10px;
+                        color:{T['text2']};font-size:13px;margin-bottom:16px;">
+                🎙️ Chatting with <b>Meeting #{st.session_state.selected_meeting_id}</b>
+            </div>
+            """, unsafe_allow_html=True)
+
+    # ── Chat history ─────────────────────────────────
+    for msg in st.session_state.chat_messages:
+        role = msg["role"]
+        content = msg["content"]
+
+        if role == "user":
+            st.markdown(f"""
+            <div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
+                <div style="max-width:75%;background:{T['accent']};color:white;
+                            padding:12px 16px;border-radius:16px 16px 4px 16px;
+                            font-size:14px;line-height:1.6;">
+                    {content}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        else:
+            # Sources expander
+            sources_html = ""
+            if msg.get("sources"):
+                sources_html = f"""
+                <div style="margin-top:10px;padding-top:10px;border-top:1px solid {T['border']};">
+                    <div style="font-size:11px;color:{T['text3']};font-weight:600;
+                                text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;">
+                        Sources used
+                    </div>"""
+                for s in msg["sources"][:3]:
+                    sources_html += f"""
+                    <div style="font-size:12px;color:{T['text3']};padding:4px 0;
+                                border-left:2px solid {T['border2']};padding-left:8px;margin-bottom:4px;">
+                        Meeting #{s['meeting_id']} · {s['filename']} · score {s['score']}
+                    </div>"""
+                sources_html += "</div>"
+
+            st.markdown(f"""
+            <div style="display:flex;justify-content:flex-start;margin-bottom:12px;">
+                <div style="max-width:80%;background:{T['surface']};
+                            border:1px solid {T['border']};
+                            padding:14px 18px;border-radius:16px 16px 16px 4px;
+                            font-size:14px;line-height:1.7;color:{T['text2']};">
+                    {content}
+                    {sources_html}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+    # ── Input box ────────────────────────────────────
+    st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
+
+    input_col, send_col = st.columns([5, 1])
+
+    with input_col:
+        user_query = st.text_input(
+            "Ask a question",
+            placeholder="What decisions were made? / Who owns the deployment task?",
+            label_visibility="collapsed",
+            key="chat_input",
+        )
+
+    with send_col:
+        send_btn = st.button("Send ➤", key="send_chat", use_container_width=True)
+
+    # ── Send logic ───────────────────────────────────
+    if send_btn and user_query.strip():
+
+        st.session_state.chat_messages.append({
+            "role": "user",
+            "content": user_query.strip(),
+        })
+
+        with st.spinner("Thinking..."):
+            try:
+                if st.session_state.chat_mode == "single":
+                    response = requests.post(
+                        f"{BACKEND_URL}/chat/meeting",
+                        json={
+                            "query": user_query.strip(),
+                            "meeting_id": st.session_state.selected_meeting_id,
+                        },
+                        timeout=30,
+                    )
+                else:
+                    response = requests.post(
+                        f"{BACKEND_URL}/chat/search",
+                        json={"query": user_query.strip()},
+                        timeout=30,
+                    )
+
+                if response.status_code == 200:
+                    data = response.json()
+                    st.session_state.chat_messages.append({
+                        "role":    "assistant",
+                        "content": data.get("answer", "No answer returned."),
+                        "sources": data.get("sources", []),
+                    })
+                else:
+                    st.session_state.chat_messages.append({
+                        "role":    "assistant",
+                        "content": f"⚠️ Backend error: {response.status_code}",
+                        "sources": [],
+                    })
+
+            except Exception as e:
+                st.session_state.chat_messages.append({
+                    "role":    "assistant",
+                    "content": f"⚠️ Connection error: {str(e)}",
+                    "sources": [],
+                })
+
+        st.rerun()
