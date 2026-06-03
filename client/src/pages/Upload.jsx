@@ -10,6 +10,7 @@ import {
 import { useTheme } from '../ThemeContext'
 import { useUploadProgress, STEPS } from '../hooks/useUploadProgress'
 import { PageHeader, Card, Button, Divider } from '../components/ui'
+import { getToken } from '../api/client'   // ← import getToken
 
 const AUDIO_EXTS = ['mp3', 'wav', 'm4a', 'aac', 'flac']
 const VIDEO_EXTS = ['mp4', 'mkv', 'avi', 'mov', 'webm']
@@ -174,13 +175,20 @@ export default function Upload() {
 
     try {
       const jobId = await prog.start()
+      const token = getToken()   // ← get token
 
       const form = new FormData()
       form.append('file', file)
 
       const res = await fetch(
         `/api/upload/progress?job_id=${jobId}`,
-        { method: 'POST', body: form }
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,   // ← attach token
+          },
+          body: form,
+        }
       )
 
       if (!res.ok) {
@@ -208,13 +216,17 @@ export default function Upload() {
 
     try {
       const jobId = await prog.start()
+      const token = getToken()   // ← get token
 
       const res = await fetch(
         `/api/youtube/progress?job_id=${jobId}`,
         {
           method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ url: ytUrl.trim(), job_id: jobId }),
+          headers: {
+            'Content-Type':  'application/json',
+            'Authorization': `Bearer ${token}`,   // ← attach token
+          },
+          body: JSON.stringify({ url: ytUrl.trim(), job_id: jobId }),
         }
       )
 

@@ -2,7 +2,12 @@
 Summly FastAPI Backend
 Phase 2 Complete with Meeting Intelligence Engine
 """
-from fastapi import FastAPI, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect, Query
+
+from core.auth.dependencies import get_current_user, get_optional_user
+from core.auth.models import User
+from typing import Optional
+from core.auth.router import router as auth_router
+from fastapi import Depends, FastAPI, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect, Query
 from fastapi import WebSocket, WebSocketDisconnect
 import asyncio
 from fastapi import FastAPI, UploadFile, File, HTTPException
@@ -63,6 +68,9 @@ app.add_middleware(
 # Initialize database
 init_db()
 logger.info("Database initialized")
+
+# Register routers
+app.include_router(auth_router)
 
 # =====================================================
 # REQUEST MODELS
@@ -213,7 +221,10 @@ def health():
 # =====================================================
 
 @app.post("/upload", response_model=TranscriptResponse, tags=["Processing"])
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
     """
     Upload and process an audio or video file.
     Returns transcript + AI intelligence.
@@ -271,7 +282,8 @@ async def upload_file(file: UploadFile = File(...)):
         logger.info("Saving to database...")
         meeting_id = save_transcript_and_get_id(
             filename=file.filename,
-            transcript=transcript
+            transcript=transcript,
+            user_id=current_user.id,
         )
         
         # Generate intelligence
@@ -323,7 +335,10 @@ async def upload_file(file: UploadFile = File(...)):
 # =====================================================
 
 @app.post("/youtube", response_model=YouTubeResponse, tags=["Processing"])
-async def process_youtube(request: YouTubeRequest):
+async def process_youtube(
+    request: YouTubeRequest,
+    current_user: User = Depends(get_current_user),
+):
     """
     Download, transcribe, and analyze YouTube video.
     Returns transcript + AI intelligence.
@@ -355,7 +370,8 @@ async def process_youtube(request: YouTubeRequest):
         logger.info("Saving to database...")
         meeting_id = save_transcript_and_get_id(
             filename=title,
-            transcript=transcript
+            transcript=transcript,
+            user_id=current_user.id,
         )
         
         # Generate intelligence
@@ -405,10 +421,10 @@ async def process_youtube(request: YouTubeRequest):
 # =====================================================
 
 @app.get("/meetings", response_model=list[MeetingBasic], tags=["Meetings"])
-def list_meetings():
-    """Get all meetings in the system."""
+def list_meetings(current_user: User = Depends(get_current_user)):
+    """Get all meetings for the authenticated user."""
     try:
-        records = get_all_transcripts()
+        records = get_all_transcripts(user_id=current_user.id)
         return [
             MeetingBasic(
                 id=row[0],
@@ -423,10 +439,13 @@ def list_meetings():
         raise HTTPException(status_code=500, detail="Failed to fetch meetings")
 
 @app.get("/meetings/{meeting_id}", response_model=MeetingDetail, tags=["Meetings"])
-def get_meeting(meeting_id: int):
+def get_meeting(
+    meeting_id: int,
+    current_user: User = Depends(get_current_user),
+):
     """Get full details of a specific meeting."""
     try:
-        meeting = get_meeting_by_id(meeting_id)
+        meeting = get_meeting_by_id(meeting_id, user_id=current_user.id)
         
         if not meeting:
             raise HTTPException(status_code=404, detail="Meeting not found")
@@ -448,9 +467,16 @@ def get_meeting(meeting_id: int):
         raise HTTPException(status_code=500, detail="Failed to fetch meeting")
 
 @app.get("/meetings/{meeting_id}/intelligence", response_model=IntelligenceResponse, tags=["Meetings"])
-def meeting_intelligence(meeting_id: int):
+def meeting_intelligence(
+    meeting_id: int,
+    current_user: User = Depends(get_current_user),
+):
     """Get intelligence report for a specific meeting."""
     try:
+        # Verify ownership
+        meeting = get_meeting_by_id(meeting_id, user_id=current_user.id)
+        if not meeting:
+            raise HTTPException(status_code=404, detail="Meeting not found")
         intelligence = get_meeting_intelligence(meeting_id)
         
         if intelligence is None:
@@ -478,7 +504,10 @@ def meeting_intelligence(meeting_id: int):
 # =====================================================
 
 @app.post("/chat/meeting", tags=["Chat"])
-def chat_meeting(request: ChatRequest):
+def chat_meeting(
+    request: ChatRequest,
+    current_user: User = Depends(get_current_user),
+):
     """
     Answer a question grounded in a single meeting.
     Requires meeting_id in the request body.
@@ -490,6 +519,11 @@ def chat_meeting(request: ChatRequest):
         )
 
     try:
+        # Verify meeting belongs to user
+        meeting = get_meeting_by_id(request.meeting_id, user_id=current_user.id)
+        if not meeting:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+
         result = chat_with_meeting(
             query=request.query,
             meeting_id=request.meeting_id,
@@ -506,7 +540,10 @@ def chat_meeting(request: ChatRequest):
 
 
 @app.post("/chat/search", tags=["Chat"])
-def chat_search(request: ChatRequest):
+def chat_search(
+    request: ChatRequest,
+    current_user: User = Depends(get_current_user),
+):
     """
     Answer a question by searching across ALL meetings.
     """
@@ -526,12 +563,13 @@ def chat_search(request: ChatRequest):
 # STATS ENDPOINT
 # =====================================================
 
+
 @app.get("/stats", tags=["System"])
-def get_stats():
+def get_stats(current_user: User = Depends(get_current_user)):
     """Aggregate stats across all meetings."""
     try:
         from core.database import get_all_transcripts, get_meeting_intelligence
-        meetings = get_all_transcripts()
+        meetings = get_all_transcripts(user_id=current_user.id)
         total_meetings   = len(meetings)
         total_decisions  = 0
         total_actions    = 0
@@ -564,12 +602,11 @@ def get_stats():
 # =====================================================
 
 @app.post("/rag/reindex", tags=["RAG"])
-def reindex_all():
-    """Re-index all meetings into ChromaDB."""
+def reindex_all(current_user: User = Depends(get_current_user)):
     try:
         from core.database import get_all_meetings_for_indexing
         from core.rag.indexer import index_meeting
-        meetings = get_all_meetings_for_indexing()
+        meetings = get_all_meetings_for_indexing(user_id=current_user.id)
         indexed = 0
         for m in meetings:
             try:
@@ -640,7 +677,7 @@ async def websocket_progress(websocket: WebSocket, job_id: str):
 class ProgressRequest(BaseModel):
     job_id: str
 
-async def _run_with_progress(job_id: str, filename: str, transcript_fn):
+async def _run_with_progress(job_id: str, filename: str, transcript_fn, user_id: int = None):
     """
     Shared progress-aware processing pipeline.
     Sends step updates over WebSocket as each phase completes.
@@ -662,7 +699,7 @@ async def _run_with_progress(job_id: str, filename: str, transcript_fn):
         await step("transcribe", "Transcription complete",        40)
 
         meeting_id = await asyncio.to_thread(
-            save_transcript_and_get_id, filename, transcript
+            save_transcript_and_get_id, filename, transcript, None, user_id
         )
 
         await step("intel",      "Generating meeting intelligence...", 60)
@@ -696,6 +733,7 @@ async def _run_with_progress(job_id: str, filename: str, transcript_fn):
 async def upload_file_with_progress(
     file:   UploadFile = File(...),
     job_id: str = Query(default=None),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Upload endpoint that streams progress over WebSocket.
@@ -728,9 +766,10 @@ async def upload_file_with_progress(
         return transcribe_audio(wav)
 
     meeting_id, transcript, intelligence = await _run_with_progress(
-        job_id   = job_id or "noop",
-        filename = file.filename,
+        job_id        = job_id or "noop",
+        filename      = file.filename,
         transcript_fn = do_transcribe,
+        user_id       = current_user.id,
     )
 
     processing_time = round(time.time() - start_time, 2)
@@ -747,7 +786,11 @@ async def upload_file_with_progress(
 
 
 @app.post("/youtube/progress", tags=["Processing"])
-async def youtube_with_progress(request: dict, job_id: str = None):
+async def youtube_with_progress(
+    request: dict,
+    job_id: str = None,
+    current_user: User = Depends(get_current_user),
+):
     """
     YouTube endpoint that streams progress over WebSocket.
     Pass job_id as query param: /youtube/progress?job_id=xyz
@@ -778,7 +821,9 @@ async def youtube_with_progress(request: dict, job_id: str = None):
         "step": "transcribe", "message": "Transcription complete", "pct": 40
     })
 
-    meeting_id = await asyncio.to_thread(save_transcript_and_get_id, title, transcript)
+    meeting_id = await asyncio.to_thread(
+        save_transcript_and_get_id, title, transcript, None, current_user.id
+    )
 
     await progress.send(job_id, {
         "step": "intel", "message": "Generating intelligence...", "pct": 60

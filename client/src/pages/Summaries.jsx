@@ -84,7 +84,7 @@ export default function Summaries() {
             >
               <Card
                 hoverable
-                onClick={() => navigate(`/meetings/${s.id}`)}
+                onClick={() => navigate(`/app/meetings/${s.id}`)}
               >
                 <div style={{
                   display: 'flex', alignItems: 'flex-start',

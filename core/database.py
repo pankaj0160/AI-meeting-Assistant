@@ -10,6 +10,7 @@ DB_NAME = Path("meetings.db")
 def init_db():
     conn = sqlite3.connect(DB_NAME)
 
+    # ── Phase 1 meetings table ─────────────────────────────────────────────────
     conn.execute("""
         CREATE TABLE IF NOT EXISTS meetings (
             id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -20,11 +21,66 @@ def init_db():
         )
     """)
 
-    # Phase 2 tables added here — IF NOT EXISTS means safe on existing databases
+    # ── Phase 1 Auth tables ────────────────────────────────────────────────────
+    _init_auth_tables(conn)
+
+    # ── Phase 2 intelligence tables ───────────────────────────────────────────
     _init_intelligence_tables(conn)
+
+    # ── Phase 1A migration — add user_id to meetings if missing ───────────────
+    _migrate_add_user_id(conn)
 
     conn.commit()
     conn.close()
+
+
+def _init_auth_tables(conn):
+    """
+    Creates users and password_reset_tokens tables.
+    Safe to run on existing databases.
+    """
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            full_name     TEXT    NOT NULL,
+            email         TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+            password_hash TEXT    NOT NULL,
+            profile_image TEXT,
+            created_at    TEXT    NOT NULL,
+            updated_at    TEXT    NOT NULL,
+            last_login    TEXT
+        )
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS password_reset_tokens (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id    INTEGER NOT NULL,
+            token      TEXT    NOT NULL UNIQUE,
+            expires_at TEXT    NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    """)
+
+
+def _migrate_add_user_id(conn):
+    """
+    Phase 1A migration.
+    Adds user_id column to meetings table if it does not already exist.
+    Existing meetings get user_id = NULL (guest/legacy meetings).
+    Safe to run multiple times.
+    """
+    cols = [
+        row[1] for row in
+        conn.execute("PRAGMA table_info(meetings)").fetchall()
+    ]
+    if "user_id" not in cols:
+        conn.execute(
+            "ALTER TABLE meetings ADD COLUMN user_id INTEGER REFERENCES users(id)"
+        )
+        print("✓ Migration: added user_id column to meetings table")
+    else:
+        print("✓ Migration: user_id column already exists, skipping")
 
 
 def save_transcript(filename: str, transcript: str, duration=None):
@@ -48,13 +104,23 @@ def save_transcript(filename: str, transcript: str, duration=None):
     conn.close()
 
 
-def get_all_transcripts():
-    """Phase 1 function — unchanged."""
+def get_all_transcripts(user_id: int = None):
+    """
+    Returns meetings ordered by newest first.
+    If user_id provided — returns only that user's meetings.
+    If user_id is None — returns all (legacy/guest support).
+    """
     conn = sqlite3.connect(DB_NAME)
 
-    rows = conn.execute(
-        "SELECT * FROM meetings ORDER BY id DESC"
-    ).fetchall()
+    if user_id is not None:
+        rows = conn.execute(
+            "SELECT * FROM meetings WHERE user_id = ? ORDER BY id DESC",
+            (user_id,)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM meetings ORDER BY id DESC"
+        ).fetchall()
 
     conn.close()
     return rows
@@ -117,30 +183,29 @@ def _init_intelligence_tables(conn):
 
 
 # ─── Phase 2 — public functions ───────────────────────────────────────────────
-
 def save_transcript_and_get_id(
     filename: str,
     transcript: str,
     duration=None,
+    user_id: int = None,
 ) -> int:
     """
     Phase 2 version of save_transcript that also returns the new row ID.
-    Use this in pipeline.py so you can link intelligence to the meeting.
-    The original save_transcript() still works for anything that doesn't
-    need the ID — no existing code breaks.
+    Accepts optional user_id to link meeting to authenticated user.
     """
     conn = sqlite3.connect(DB_NAME)
 
     cursor = conn.execute(
         """
-        INSERT INTO meetings (filename, transcript, created_at, duration_seconds)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO meetings (filename, transcript, created_at, duration_seconds, user_id)
+        VALUES (?, ?, ?, ?, ?)
         """,
         (
             filename,
             transcript,
             datetime.datetime.now().isoformat(),
             duration,
+            user_id,
         ),
     )
 
@@ -269,20 +334,30 @@ def get_meeting_intelligence(meeting_id: int) -> dict | None:
     }
 
 
-def get_meeting_by_id(meeting_id: int) -> dict | None:
+def get_meeting_by_id(meeting_id: int, user_id: int = None) -> dict | None:
     """
     Fetch a single meeting row by ID.
-    Returns a plain dict or None if not found.
+    If user_id provided — verifies meeting belongs to that user.
+    Returns None if not found or unauthorized.
     """
     conn = sqlite3.connect(DB_NAME)
 
-    row = conn.execute(
-        """
-        SELECT id, filename, transcript, created_at, duration_seconds
-        FROM meetings WHERE id = ?
-        """,
-        (meeting_id,),
-    ).fetchone()
+    if user_id is not None:
+        row = conn.execute(
+            """
+            SELECT id, filename, transcript, created_at, duration_seconds, user_id
+            FROM meetings WHERE id = ? AND user_id = ?
+            """,
+            (meeting_id, user_id),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            """
+            SELECT id, filename, transcript, created_at, duration_seconds, user_id
+            FROM meetings WHERE id = ?
+            """,
+            (meeting_id,),
+        ).fetchone()
 
     conn.close()
 
@@ -290,59 +365,41 @@ def get_meeting_by_id(meeting_id: int) -> dict | None:
         return None
 
     return dict(
-        zip(["id", "filename", "transcript", "created_at", "duration_seconds"], row)
+        zip(["id", "filename", "transcript", "created_at", "duration_seconds", "user_id"], row)
     )
 
 
+
+
 # ─── Phase 3 — new function only, zero existing code changed ──────────────────
- 
-def get_all_meetings_for_indexing() -> list[dict]:
+def get_all_meetings_for_indexing(user_id: int = None) -> list[dict]:
     """
-    Phase 3 — Fetch all meetings with the fields needed for RAG indexing.
- 
-    WHY THIS FUNCTION EXISTS
-    ─────────────────────────
-    When you run the reindex script (to build ChromaDB from existing meetings),
-    you need to iterate over every meeting and feed each one to index_meeting().
- 
-    This function is the data source for that script.
- 
-    It only returns the fields index_meeting() needs:
-      - id            → meeting_id
-      - filename      → meeting_filename (for source citations)
-      - transcript    → the text to chunk and embed
-      - created_at    → meeting_date (for source citations)
- 
-    It does NOT return the full transcript text in a heavy join —
-    just what's needed for RAG. This keeps memory usage low when
-    you have hundreds of meetings.
- 
-    Returns:
-        List of dicts, each containing:
-        {
-            "id":         int,
-            "filename":   str,
-            "transcript": str,
-            "created_at": str,
-        }
-        Ordered by id ascending (oldest first) — so re-indexing is deterministic.
- 
-    Used by:
-        core/rag/reindex.py   (Step 5 addition — batch re-index script)
-        POST /rag/reindex     (Step 5 addition — admin API endpoint)
+    Phase 3 — Fetch all meetings for RAG indexing.
+    If user_id provided — only that user's meetings.
     """
     conn = sqlite3.connect(DB_NAME)
- 
-    rows = conn.execute(
-        """
-        SELECT id, filename, transcript, created_at
-        FROM meetings
-        ORDER BY id ASC
-        """
-    ).fetchall()
- 
+
+    if user_id is not None:
+        rows = conn.execute(
+            """
+            SELECT id, filename, transcript, created_at
+            FROM meetings
+            WHERE user_id = ?
+            ORDER BY id ASC
+            """,
+            (user_id,)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT id, filename, transcript, created_at
+            FROM meetings
+            ORDER BY id ASC
+            """
+        ).fetchall()
+
     conn.close()
- 
+
     return [
         {
             "id":         row[0],
@@ -351,5 +408,5 @@ def get_all_meetings_for_indexing() -> list[dict]:
             "created_at": row[3] or "",
         }
         for row in rows
-        if row[2]  # skip meetings with no transcript (shouldn't happen, but safe)
+        if row[2]
     ]

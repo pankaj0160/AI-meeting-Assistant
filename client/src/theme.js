@@ -2,172 +2,184 @@
 
 export const DARK = {
   // ── Backgrounds
-  bg:           '#13161e',
-  bgSubtle:     '#0f1117',
-  surface:      '#1a1e2a',
-  surface2:     '#1f2436',
-  surface3:     '#252b3b',
-  surfaceHover: '#252d40',
+  bg:           '#080b12',
+  bgSubtle:     '#060810',
+  surface:      '#0d1120',
+  surface2:     '#111827',
+  surface3:     '#151d2e',
+  surfaceHover: '#192035',
 
   // ── Borders
-  border:       '#272d3d',
-  border2:      '#2f3650',
-  borderFocus:  '#5b6af0',
+  border:       '#1c2540',
+  border2:      '#253050',
+  borderFocus:  '#6366f1',
 
   // ── Text — maximum readability on dark
-  text:         '#eef0f6',
-  text2:        '#aeb5cc',
-  text3:        '#6b748f',
-  text4:        '#3f4660',
+  text:         '#f0f4ff',
+  text2:        '#c4cde8',
+  text3:        '#6b7799',
+  text4:        '#384060',
 
-  // ── Brand accent (indigo)
-  accent:       '#5b6af0',
-  accentLight:  '#7b8cf8',
-  accentBg:     'rgba(91,106,240,0.12)',
-  accentHover:  'rgba(91,106,240,0.18)',
+  // ── Brand accent (indigo/violet)
+  accent:       '#6366f1',
+  accentLight:  '#818cf8',
+  accentBg:     'rgba(99,102,241,0.13)',
+  accentHover:  'rgba(99,102,241,0.20)',
 
   // ── Semantic colors
-  // Summary → blue
   blue:         '#3b82f6',
-  blueBg:       'rgba(59,130,246,0.10)',
+  blueBg:       'rgba(59,130,246,0.12)',
   blueText:     '#93c5fd',
 
-  // Decisions → purple
   purple:       '#a855f7',
-  purpleBg:     'rgba(168,85,247,0.10)',
+  purpleBg:     'rgba(168,85,247,0.12)',
   purpleText:   '#d8b4fe',
 
-  // Action items → orange
   orange:       '#f97316',
-  orangeBg:     'rgba(249,115,22,0.10)',
-  orangeText:   '#fdba74',
+  orangeBg:     'rgba(249,115,22,0.12)',
+  orangeText:   '#fed7aa',
 
-  // Tasks → emerald
   emerald:      '#10b981',
-  emeraldBg:    'rgba(16,185,129,0.10)',
+  emeraldBg:    'rgba(16,185,129,0.12)',
   emeraldText:  '#6ee7b7',
 
-  // Speakers → cyan
   cyan:         '#06b6d4',
-  cyanBg:       'rgba(6,182,212,0.10)',
+  cyanBg:       'rgba(6,182,212,0.12)',
   cyanText:     '#67e8f9',
 
-  // Success / warning / danger
+  rose:         '#f43f5e',
+  roseBg:       'rgba(244,63,94,0.12)',
+  roseText:     '#fda4af',
+
   success:      '#10b981',
-  successBg:    'rgba(16,185,129,0.10)',
+  successBg:    'rgba(16,185,129,0.12)',
   warning:      '#f59e0b',
-  warningBg:    'rgba(245,158,11,0.10)',
+  warningBg:    'rgba(245,158,11,0.12)',
   danger:       '#ef4444',
-  dangerBg:     'rgba(239,68,68,0.10)',
+  dangerBg:     'rgba(239,68,68,0.12)',
 
   // ── UI
-  btnGrad:      'linear-gradient(135deg, #5b6af0, #a855f7)',
-  btnShadow:    '0 4px 16px rgba(91,106,240,0.35)',
-  cardShadow:   '0 1px 3px rgba(0,0,0,0.4), 0 6px 20px rgba(0,0,0,0.25)',
-  cardShadowHover: '0 4px 24px rgba(0,0,0,0.4)',
+  btnGrad:      'linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #06b6d4 100%)',
+  btnShadow:    '0 4px 24px rgba(99,102,241,0.45)',
+  cardShadow:   '0 1px 2px rgba(0,0,0,0.6), 0 8px 32px rgba(0,0,0,0.35)',
+  cardShadowHover: '0 6px 40px rgba(0,0,0,0.5), 0 0 0 1px rgba(99,102,241,0.15)',
 
   // ── Sidebar
-  sidebarBg:    '#0f1117',
-  sidebarBorder:'#1e2230',
-  navColor:     '#5a6380',
-  navHover:     '#9aa3be',
-  navActiveText:'#eef0f6',
-  navActiveBg:  'rgba(91,106,240,0.14)',
-  navActiveBorder: 'rgba(91,106,240,0.30)',
+  sidebarBg:    '#060810',
+  sidebarBorder:'#141928',
+  navColor:     '#4a5270',
+  navHover:     '#8892b0',
+  navActiveText:'#f0f4ff',
+  navActiveBg:  'rgba(99,102,241,0.16)',
+  navActiveBorder: 'rgba(99,102,241,0.35)',
 
   // ── Inputs
-  inputBg:      '#1a1e2a',
-  inputBorder:  '#272d3d',
+  inputBg:      '#0d1120',
+  inputBorder:  '#1c2540',
 
   // ── Skeleton
-  skeletonBase: '#1f2436',
-  skeletonShine:'#252b3b',
+  skeletonBase: '#111827',
+  skeletonShine:'#1a2235',
 
   // ── Toggle
-  toggleBg:     '#1f2436',
-  toggleBorder: '#2f3650',
-  toggleColor:  '#6b748f',
+  toggleBg:     '#111827',
+  toggleBorder: '#1c2540',
+  toggleColor:  '#6b7799',
+
+  // ── Glow effects
+  glowAccent:   'rgba(99,102,241,0.35)',
+  glowPurple:   'rgba(168,85,247,0.25)',
+  glowCyan:     'rgba(6,182,212,0.20)',
 }
 
 export const LIGHT = {
-  // ── Backgrounds
-  bg:           '#e8edf4',
-  bgSubtle:     '#dde3ec',
+  // ── Backgrounds — warm ivory/cream base
+  bg:           '#f5f4f0',
+  bgSubtle:     '#eeece7',
   surface:      '#ffffff',
-  surface2:     '#f2f5fb',
-  surface3:     '#eaeff7',
-  surfaceHover: '#f7f9fd',
+  surface2:     '#faf9f6',
+  surface3:     '#f0eeea',
+  surfaceHover: '#fefefe',
 
   // ── Borders
-  border:       '#d4daea',
-  border2:      '#c5cedf',
-  borderFocus:  '#4f46e5',
+  border:       '#e0ddd5',
+  border2:      '#d0ccc2',
+  borderFocus:  '#5046e4',
 
-  // ── Text — maximum readability on light
-  text:         '#0e1118',
-  text2:        '#2e3650',
-  text3:        '#5a6580',
-  text4:        '#9aa3bc',
+  // ── Text
+  text:         '#0f0e0a',
+  text2:        '#2c2a22',
+  text3:        '#6b6556',
+  text4:        '#a09880',
 
   // ── Brand accent
-  accent:       '#4f46e5',
+  accent:       '#5046e4',
   accentLight:  '#6366f1',
-  accentBg:     'rgba(79,70,229,0.07)',
-  accentHover:  'rgba(79,70,229,0.12)',
+  accentBg:     'rgba(80,70,228,0.08)',
+  accentHover:  'rgba(80,70,228,0.14)',
 
   // ── Semantic
   blue:         '#2563eb',
-  blueBg:       'rgba(37,99,235,0.07)',
+  blueBg:       'rgba(37,99,235,0.08)',
   blueText:     '#1d4ed8',
 
   purple:       '#7c3aed',
-  purpleBg:     'rgba(124,58,237,0.07)',
-  purpleText:   '#5b21b6',
+  purpleBg:     'rgba(124,58,237,0.08)',
+  purpleText:   '#6d28d9',
 
   orange:       '#ea580c',
-  orangeBg:     'rgba(234,88,12,0.07)',
-  orangeText:   '#9a3412',
+  orangeBg:     'rgba(234,88,12,0.08)',
+  orangeText:   '#c2410c',
 
   emerald:      '#059669',
-  emeraldBg:    'rgba(5,150,105,0.07)',
-  emeraldText:  '#065f46',
+  emeraldBg:    'rgba(5,150,105,0.08)',
+  emeraldText:  '#047857',
 
   cyan:         '#0891b2',
-  cyanBg:       'rgba(8,145,178,0.07)',
-  cyanText:     '#164e63',
+  cyanBg:       'rgba(8,145,178,0.08)',
+  cyanText:     '#0e7490',
+
+  rose:         '#e11d48',
+  roseBg:       'rgba(225,29,72,0.08)',
+  roseText:     '#be185d',
 
   success:      '#059669',
-  successBg:    'rgba(5,150,105,0.07)',
+  successBg:    'rgba(5,150,105,0.08)',
   warning:      '#d97706',
-  warningBg:    'rgba(217,119,6,0.07)',
+  warningBg:    'rgba(217,119,6,0.08)',
   danger:       '#dc2626',
-  dangerBg:     'rgba(220,38,38,0.07)',
+  dangerBg:     'rgba(220,38,38,0.08)',
 
   // ── UI
-  btnGrad:      'linear-gradient(135deg, #4f46e5, #7c3aed)',
-  btnShadow:    '0 4px 14px rgba(79,70,229,0.28)',
-  cardShadow:   '0 1px 3px rgba(0,0,0,0.06), 0 4px 16px rgba(0,0,0,0.05)',
-  cardShadowHover: '0 4px 24px rgba(0,0,0,0.10)',
+  btnGrad:      'linear-gradient(135deg, #5046e4 0%, #7c3aed 50%, #0891b2 100%)',
+  btnShadow:    '0 4px 16px rgba(80,70,228,0.30)',
+  cardShadow:   '0 1px 3px rgba(0,0,0,0.07), 0 6px 20px rgba(0,0,0,0.06)',
+  cardShadowHover: '0 8px 32px rgba(0,0,0,0.12), 0 0 0 1px rgba(80,70,228,0.12)',
 
   // ── Sidebar
-  sidebarBg:    '#dde3ec',
-  sidebarBorder:'#c8d0e0',
-  navColor:     '#5a6580',
-  navHover:     '#0e1118',
-  navActiveText:'#0e1118',
-  navActiveBg:  'rgba(79,70,229,0.10)',
-  navActiveBorder:'rgba(79,70,229,0.22)',
+  sidebarBg:    '#eeece7',
+  sidebarBorder:'#dddad0',
+  navColor:     '#5a5545',
+  navHover:     '#0f0e0a',
+  navActiveText:'#0f0e0a',
+  navActiveBg:  'rgba(80,70,228,0.10)',
+  navActiveBorder:'rgba(80,70,228,0.25)',
 
   // ── Inputs
   inputBg:      '#ffffff',
-  inputBorder:  '#d4daea',
+  inputBorder:  '#e0ddd5',
 
   // ── Skeleton
-  skeletonBase: '#e2e8f0',
-  skeletonShine:'#f1f5f9',
+  skeletonBase: '#e8e6e0',
+  skeletonShine:'#f5f4f0',
 
   // ── Toggle
-  toggleBg:     '#eaeff7',
-  toggleBorder: '#d4daea',
-  toggleColor:  '#5a6580',
+  toggleBg:     '#f0eeea',
+  toggleBorder: '#e0ddd5',
+  toggleColor:  '#6b6556',
+
+  // ── Glow
+  glowAccent:   'rgba(80,70,228,0.18)',
+  glowPurple:   'rgba(124,58,237,0.12)',
+  glowCyan:     'rgba(8,145,178,0.10)',
 }

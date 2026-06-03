@@ -214,7 +214,7 @@ export default function MeetingDetail() {
       title="Failed to load meeting"
       subtitle={error}
       action={
-        <Button variant="secondary" onClick={() => navigate('/meetings')}>
+        <Button variant="secondary" onClick={() => navigate('/app/meetings')}>
           Back to Meetings
         </Button>
       }
@@ -254,7 +254,7 @@ export default function MeetingDetail() {
 
       {/* ── Back button ── */}
       <button
-        onClick={() => navigate('/meetings')}
+        onClick={() => navigate('/app/meetings')}
         className="anim-fade-in"
         style={{
           display: 'inline-flex', alignItems: 'center', gap: '6px',
@@ -331,7 +331,7 @@ export default function MeetingDetail() {
             <Button
               size="sm"
               icon={<MessageSquare size={13} />}
-              onClick={() => navigate(`/chat?meeting=${id}`)}
+              onClick={() => navigate(`/app/chat?meeting=${id}`)}
             >
               Chat
             </Button>

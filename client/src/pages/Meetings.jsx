@@ -43,7 +43,7 @@ export default function Meetings() {
         title="Meetings"
         subtitle={`${meetings.length} meeting${meetings.length !== 1 ? 's' : ''} processed`}
         action={
-          <Button onClick={() => navigate('/upload')} icon={<Mic size={15} />}>
+          <Button onClick={() => navigate('/app/upload')} icon={<Mic size={15} />}>
             New Meeting
           </Button>
         }
@@ -99,7 +99,7 @@ export default function Meetings() {
               : 'Upload your first meeting recording to get started.'
             }
             action={!query &&
-              <Button icon={<Mic size={15} />} onClick={() => navigate('/upload')}>
+              <Button icon={<Mic size={15} />} onClick={() => navigate('/app/upload')}>
                 Upload Meeting
               </Button>
             }
@@ -131,7 +131,7 @@ export default function Meetings() {
                 key={m.id}
                 meeting={m}
                 delay={i * 0.04}
-                onClick={() => navigate(`/meetings/${m.id}`)}
+                onClick={() => navigate(`/app/meetings/${m.id}`)}
                 T={T}
               />
             ))}

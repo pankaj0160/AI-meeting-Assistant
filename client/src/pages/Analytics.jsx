@@ -66,6 +66,7 @@ export default function Analytics() {
     borderRadius: '10px',
     color: T.text,
     fontSize: '13px',
+    textAlign: 'center',
     fontFamily: 'var(--font)',
     boxShadow: T.cardShadow,
   }
@@ -89,7 +90,7 @@ export default function Analytics() {
   )
 
   return (
-    <div>
+    <div style={{ animation: 'fadeIn 0.3s ease', textAlign: 'center', padding: '40px 20px'}}>
       <PageHeader
         title="Analytics"
         subtitle="Trends and insights across all your meetings."

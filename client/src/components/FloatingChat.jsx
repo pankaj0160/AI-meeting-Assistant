@@ -9,7 +9,7 @@ import { useLocation } from 'react-router-dom'
 // Extract meeting ID from URL if on meeting detail page
 function useMeetingIdFromUrl() {
   const loc = useLocation()
-  const match = loc.pathname.match(/^\/meetings\/(\d+)$/)
+  const match = loc.pathname.match(/^\/app\/meetings\/(\d+)$/)
   return match ? Number(match[1]) : null
 }
 

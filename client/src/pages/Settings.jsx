@@ -2,7 +2,10 @@
 
 import { useTheme } from '../ThemeContext'
 import { PageHeader, Card, Divider } from '../components/ui'
-import { Sun, Moon, Info } from 'lucide-react'
+import { Sun, Moon, Info, LogOut } from 'lucide-react'
+
+import { useAuth } from '../context/AuthContext'
+import { useNavigate } from 'react-router-dom'
 
 function SettingRow({ label, description, children }) {
   const { T } = useTheme()
@@ -34,11 +37,32 @@ function SettingRow({ label, description, children }) {
 export default function Settings() {
   const { T, isDark, toggle } = useTheme()
 
+  const { user, logout } = useAuth()
+  const navigate = useNavigate()
+
+  const handleLogout = () => {
+    logout()
+    navigate('/login', { replace: true })
+  }
+
   return (
-    <div>
+    <div
+    style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            width: '100%',
+        }}
+    >
       <PageHeader title="Settings" subtitle="Manage your Summly preferences." />
 
-      <div style={{ maxWidth: '640px' }}>
+      <div
+        style={{
+            maxWidth: '640px',
+            margin: '0 auto',
+            width: '100%',
+        }}
+        >
 
         {/* Appearance */}
         <Card style={{ marginBottom: '20px' }}>
@@ -86,6 +110,32 @@ export default function Settings() {
           </SettingRow>
         </Card>
 
+         {/* Account */}
+        <Card style={{ marginBottom: '20px' }}>
+        <div style={{
+            fontSize: '13px', fontWeight: 700,
+            letterSpacing: '0.08em', textTransform: 'uppercase',
+            color: T.text3, marginBottom: '4px',
+        }}>
+            Account
+        </div>
+        <SettingRow label="Signed in as" description={user?.email}>
+            <button
+            onClick={handleLogout}
+            style={{
+                display: 'inline-flex', alignItems: 'center', gap: '7px',
+                padding: '8px 16px', borderRadius: '9px',
+                fontSize: '13px', fontWeight: 600,
+                color: T.danger, background: T.dangerBg,
+                border: `1px solid ${T.danger}33`,
+                cursor: 'pointer', transition: 'all 0.15s ease',
+            }}
+            >
+            <LogOut size={14} /> Sign Out
+            </button>
+        </SettingRow>
+        </Card>
+
         {/* About */}
         <Card>
           <div style={{
@@ -118,4 +168,5 @@ export default function Settings() {
       </div>
     </div>
   )
+
 }
