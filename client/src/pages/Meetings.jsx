@@ -10,6 +10,10 @@ import {
   EmptyState, Skeleton, Badge
 } from '../components/ui'
 
+// ── Spacing scale (px) ────────────────────────────────────────────────────────
+// sp1=4  sp2=8  sp3=12  sp4=16  sp5=20  sp6=24  sp7=28  sp8=32  sp10=40
+// Using these consistently keeps vertical rhythm uniform across the page.
+
 function fmt(iso) {
   if (!iso) return '—'
   try {
@@ -49,11 +53,15 @@ export default function Meetings() {
         }
       />
 
-      {/* ── Search ── */}
-      <div style={{ position: 'relative', marginBottom: '24px', maxWidth: '420px' }}>
+      {/* ── Search ──────────────────────────────────────────────────────────── */}
+      {/* mb:28 gives clear separation between search bar and the card below   */}
+      <div style={{ position: 'relative', marginBottom: '28px', maxWidth: '420px' }}>
         <Search
           size={16} color={T.text3}
-          style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)' }}
+          style={{
+            position: 'absolute', left: '14px',
+            top: '50%', transform: 'translateY(-50%)',
+          }}
         />
         <input
           value={query}
@@ -61,7 +69,7 @@ export default function Meetings() {
           placeholder="Search meetings..."
           style={{
             width: '100%',
-            padding: '11px 16px 11px 42px',
+            padding: '11px 16px 11px 42px',  // 11px top/bottom = 40px input height
             borderRadius: '10px',
             border: `1px solid ${T.inputBorder}`,
             background: T.inputBg,
@@ -75,12 +83,20 @@ export default function Meetings() {
         />
       </div>
 
-      {/* ── List ── */}
+      {/* ── List card ───────────────────────────────────────────────────────── */}
       <Card style={{ padding: 0, overflow: 'hidden' }}>
         {loading ? (
-          <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            {[1,2,3,4].map(i => (
-              <div key={i} style={{ display: 'flex', gap: '14px', alignItems: 'center', padding: '8px 4px' }}>
+          // Skeleton: 20px outer padding, 16px gap between skeleton rows
+          <div style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            {[1, 2, 3, 4].map(i => (
+              <div
+                key={i}
+                style={{
+                  display: 'flex', gap: '12px',
+                  alignItems: 'center',
+                  padding: '6px 0', // 6px top/bottom keeps rows at ~56px total
+                }}
+              >
                 <Skeleton width="44px" height="44px" style={{ borderRadius: '10px', flexShrink: 0 }} />
                 <div style={{ flex: 1 }}>
                   <Skeleton width="55%" height="15px" style={{ marginBottom: '8px' }} />
@@ -106,15 +122,16 @@ export default function Meetings() {
           />
         ) : (
           <div>
-            {/* Table header */}
+            {/* Table header — 14px vertical padding gives clear label height    */}
+            {/* without competing visually with the data rows below               */}
             <div style={{
               display: 'grid',
-              gridTemplateColumns: '1fr 160px 120px 44px',
+              gridTemplateColumns: '1fr 140px 110px 130px 44px',
               gap: '16px',
-              padding: '12px 24px',
+              padding: '14px 24px',
               borderBottom: `1px solid ${T.border}`,
             }}>
-              {['Meeting', 'Date', 'Status', ''].map(h => (
+              {['Meeting', 'Date', 'ID', 'Status', ''].map(h => (
                 <div key={h} style={{
                   fontSize: '11px', fontWeight: 700,
                   letterSpacing: '0.08em', textTransform: 'uppercase',
@@ -156,9 +173,11 @@ function MeetingRow({ meeting, onClick, delay, T }) {
         onMouseLeave={() => setHovered(false)}
         style={{
           display: 'grid',
-          gridTemplateColumns: '1fr 160px 120px 44px',
+          gridTemplateColumns: '1fr 140px 110px 130px 44px',
           gap: '16px',
-          padding: '16px 24px',
+          // 18px top/bottom: enough breathing room between rows without
+          // making the list feel too spacious for dense data
+          padding: '18px 24px',
           alignItems: 'center',
           cursor: 'pointer',
           background: hovered ? T.surfaceHover : 'transparent',
@@ -166,8 +185,9 @@ function MeetingRow({ meeting, onClick, delay, T }) {
           transition: 'background 0.15s ease',
         }}
       >
-        {/* Name */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', minWidth: 0 }}>
+        {/* Meeting name */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
+          {/* Icon container: 40x40 with internal centering */}
           <div style={{
             width: '40px', height: '40px',
             borderRadius: '10px',
@@ -187,23 +207,50 @@ function MeetingRow({ meeting, onClick, delay, T }) {
           </div>
         </div>
 
-        {/* Date */}
+        {/* Date — icon and text baseline-aligned with 8px gap */}
         <div style={{
-          display: 'flex', alignItems: 'center', gap: '7px',
+          display: 'flex', alignItems: 'center', gap: '8px',
           fontSize: '13px', color: T.text3, fontWeight: 400,
         }}>
           <Calendar size={13} color={T.text4} />
           {fmt(meeting.created_at)}
         </div>
 
-        {/* Status */}
+        {/* Meeting ID — monospace pill, truncated to first 8 chars */}
+        <div style={{
+          display: 'inline-flex', alignItems: 'center',
+          maxWidth: '110px',
+        }}>
+          <span style={{
+            fontSize: '11.5px',
+            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+            color: T.text3,
+            background: T.surface2,
+            border: `1px solid ${T.border}`,
+            borderRadius: '6px',
+            padding: '3px 8px',
+            letterSpacing: '0.02em',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            maxWidth: '100%',
+            display: 'block',
+          }}>
+            {String(meeting.id).length > 8
+              ? String(meeting.id).slice(0, 8) + '…'
+              : String(meeting.id)
+            }
+          </span>
+        </div>
+
+        {/* Status badge */}
         <div>
           <Badge color={T.emeraldText} bg={T.emeraldBg}>
             Processed
           </Badge>
         </div>
 
-        {/* Arrow */}
+        {/* Arrow — appears on hover */}
         <div style={{
           display: 'flex', justifyContent: 'center',
           opacity: hovered ? 1 : 0,

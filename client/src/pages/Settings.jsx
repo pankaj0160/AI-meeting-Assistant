@@ -15,13 +15,28 @@ import {
 } from '../api/client'
 import { PageHeader, Card, Button, Divider } from '../components/ui'
 
+// ── Spacing scale (px) ────────────────────────────────────────────────────────
+// sp1=4  sp2=8  sp3=12  sp4=16  sp5=20  sp6=24  sp7=28  sp8=32  sp10=40
+//
+// Section rhythm:
+//   Between sections (SettingsSection):  40px  (sp10)
+//   Within section header (icon → text): 14px
+//   Within Card children (input gap):    16px  (sp4)
+//   Label → field gap:                   8px   (sp2)
+//   Field → hint gap:                    8px   (sp2)
+//   Alert → first field:                 20px  (sp5)
+//   Last field → action button row:      20px  (sp5)
+//   Row padding in "Sign out" block:     22px 24px
+
+
 // ── Section wrapper ────────────────────────────────────────────────────────────
 function SettingsSection({ icon, title, desc, children, T }) {
   return (
-    <div style={{ marginBottom: '28px' }}>
+    // 40px between sections creates clear visual grouping at page scan level
+    <div style={{ marginBottom: '40px' }}>
       <div style={{
         display: 'flex', alignItems: 'flex-start', gap: '14px',
-        marginBottom: '18px',
+        marginBottom: '16px', // 16px between section header and its card
       }}>
         <div style={{
           width: '38px', height: '38px', borderRadius: '10px',
@@ -37,7 +52,8 @@ function SettingsSection({ icon, title, desc, children, T }) {
           }}>
             {title}
           </div>
-          <div style={{ fontSize: '13px', color: T.text3, marginTop: '2px' }}>
+          {/* 4px between title and desc — tight relationship, same semantic block */}
+          <div style={{ fontSize: '13px', color: T.text3, marginTop: '4px' }}>
             {desc}
           </div>
         </div>
@@ -47,15 +63,17 @@ function SettingsSection({ icon, title, desc, children, T }) {
   )
 }
 
+
 // ── Input ──────────────────────────────────────────────────────────────────────
 function Input({ label, value, onChange, type = 'text', placeholder, disabled, hint }) {
   const { T } = useTheme()
   const [focused, setFocused] = useState(false)
   return (
     <div>
+      {/* 8px below label before the field — distinct but not overspacious */}
       <label style={{
         display: 'block', fontSize: '12.5px',
-        fontWeight: 650, color: T.text2, marginBottom: '7px',
+        fontWeight: 650, color: T.text2, marginBottom: '8px',
       }}>
         {label}
       </label>
@@ -81,9 +99,10 @@ function Input({ label, value, onChange, type = 'text', placeholder, disabled, h
         onBlur={() => setFocused(false)}
       />
       {hint && (
+        // 8px between field and hint keeps them clearly associated
         <div style={{
           fontSize: '12px', color: T.text4,
-          marginTop: '5px',
+          marginTop: '8px',
         }}>
           {hint}
         </div>
@@ -91,6 +110,7 @@ function Input({ label, value, onChange, type = 'text', placeholder, disabled, h
     </div>
   )
 }
+
 
 // ── Alert ──────────────────────────────────────────────────────────────────────
 function Alert({ type, message, T }) {
@@ -100,11 +120,12 @@ function Alert({ type, message, T }) {
   }[type]
 
   return (
+    // 20px below alert before first field: alert is visually separated from form
     <div className="anim-fade-up" style={{
       display: 'flex', alignItems: 'center', gap: '10px',
-      padding: '11px 14px', borderRadius: '10px',
+      padding: '12px 14px', borderRadius: '10px',
       background: config.bg, border: `1px solid ${config.color}44`,
-      marginBottom: '18px',
+      marginBottom: '20px',
     }}>
       <span style={{ color: config.color, flexShrink: 0 }}>{config.icon}</span>
       <span style={{ fontSize: '13px', color: config.color, fontWeight: 500 }}>
@@ -114,6 +135,7 @@ function Alert({ type, message, T }) {
   )
 }
 
+
 // ── Main ───────────────────────────────────────────────────────────────────────
 export default function Settings() {
   const { T, isDark, toggle } = useTheme()
@@ -121,17 +143,17 @@ export default function Settings() {
   const navigate = useNavigate()
 
   // Profile form
-  const [fullName, setFullName] = useState(user?.full_name || '')
+  const [fullName,      setFullName]      = useState(user?.full_name || '')
   const [profileLoading, setProfileLoading] = useState(false)
   const [profileAlert,   setProfileAlert]   = useState(null)
 
   // Password form
-  const [currentPw,  setCurrentPw]  = useState('')
-  const [newPw,      setNewPw]      = useState('')
-  const [confirmPw,  setConfirmPw]  = useState('')
-  const [showPws,    setShowPws]    = useState(false)
-  const [pwLoading,  setPwLoading]  = useState(false)
-  const [pwAlert,    setPwAlert]    = useState(null)
+  const [currentPw, setCurrentPw] = useState('')
+  const [newPw,     setNewPw]     = useState('')
+  const [confirmPw, setConfirmPw] = useState('')
+  const [showPws,   setShowPws]   = useState(false)
+  const [pwLoading, setPwLoading] = useState(false)
+  const [pwAlert,   setPwAlert]   = useState(null)
 
   // Avatar initial
   const initial = user?.full_name?.charAt(0).toUpperCase() || '?'
@@ -188,7 +210,8 @@ export default function Settings() {
         subtitle="Manage your account, security, and preferences."
       />
 
-      <div style={{ maxWidth: '640px' }}>
+      {/* Content centered on page — PageHeader remains full-width above */}
+      <div style={{ maxWidth: '640px', margin: '0 auto' }}>
 
         {/* ── Profile ── */}
         <SettingsSection
@@ -197,10 +220,10 @@ export default function Settings() {
           desc="Update your name and account information."
           T={T}
         >
-          {/* Avatar */}
+          {/* Avatar block — 28px below before inputs for visual breathing room */}
           <div style={{
             display: 'flex', alignItems: 'center', gap: '16px',
-            marginBottom: '24px',
+            marginBottom: '28px',
           }}>
             <div style={{
               width: '56px', height: '56px', borderRadius: '50%',
@@ -212,9 +235,10 @@ export default function Settings() {
               {initial}
             </div>
             <div>
+              {/* 4px between name and email — tightly grouped identity info */}
               <div style={{
                 fontSize: '15px', fontWeight: 700,
-                color: T.text, marginBottom: '3px',
+                color: T.text, marginBottom: '4px',
               }}>
                 {user?.full_name}
               </div>
@@ -228,7 +252,8 @@ export default function Settings() {
             <Alert type={profileAlert.type} message={profileAlert.message} T={T} />
           )}
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          {/* 16px gap between form fields (sp4) */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <Input
               label="Full name"
               value={fullName}
@@ -244,7 +269,8 @@ export default function Settings() {
             />
           </div>
 
-          <div style={{ marginTop: '18px' }}>
+          {/* 20px above action button — clear separation from fields */}
+          <div style={{ marginTop: '20px' }}>
             <Button
               onClick={saveProfile}
               loading={profileLoading}
@@ -268,7 +294,8 @@ export default function Settings() {
             <Alert type={pwAlert.type} message={pwAlert.message} T={T} />
           )}
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          {/* 16px gap between password fields */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div style={{ position: 'relative' }}>
               <Input
                 label="Current password"
@@ -295,9 +322,10 @@ export default function Settings() {
             />
           </div>
 
+          {/* 20px above action row — matches profile section rhythm */}
           <div style={{
             display: 'flex', alignItems: 'center',
-            justifyContent: 'space-between', marginTop: '18px',
+            justifyContent: 'space-between', marginTop: '20px',
           }}>
             <button
               onClick={() => setShowPws(s => !s)}
@@ -331,14 +359,17 @@ export default function Settings() {
           desc="Customize how Summly looks."
           T={T}
         >
+          {/* Single-row layout: label+desc on left, toggle on right */}
+          {/* No extra padding needed — Card provides internal padding */}
           <div style={{
             display: 'flex', alignItems: 'center',
-            justifyContent: 'space-between',
+            justifyContent: 'space-between', gap: '16px',
           }}>
             <div>
+              {/* 4px between "Theme" label and its sub-description */}
               <div style={{
                 fontSize: '14px', fontWeight: 600, color: T.text,
-                marginBottom: '3px',
+                marginBottom: '4px',
               }}>
                 Theme
               </div>
@@ -350,6 +381,7 @@ export default function Settings() {
               display: 'inline-flex',
               background: T.surface2, border: `1px solid ${T.border}`,
               borderRadius: '11px', padding: '4px', gap: '4px',
+              flexShrink: 0, // prevent toggle collapsing on narrow containers
             }}>
               {[
                 { val: true,  icon: <Moon size={14} />,  label: 'Dark'  },
@@ -377,22 +409,24 @@ export default function Settings() {
           </div>
         </SettingsSection>
 
-        {/* ── Data ── */}
+        {/* ── Data & Export ── */}
         <SettingsSection
           icon={<Database size={18} color={T.accentLight} />}
           title="Data & Export"
           desc="Manage your meeting data."
           T={T}
         >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          {/* 16px gap between data action items */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div style={{
               display: 'flex', alignItems: 'center',
               justifyContent: 'space-between', gap: '16px',
             }}>
               <div>
+                {/* 4px between action title and its description */}
                 <div style={{
                   fontSize: '14px', fontWeight: 600, color: T.text,
-                  marginBottom: '3px',
+                  marginBottom: '4px',
                 }}>
                   Export all meetings
                 </div>
@@ -404,6 +438,7 @@ export default function Settings() {
                 variant="ghost" size="sm"
                 icon={<Download size={13} />}
                 onClick={() => alert('Export feature coming soon.')}
+                style={{ flexShrink: 0 }}
               >
                 Export
               </Button>
@@ -411,8 +446,9 @@ export default function Settings() {
 
             <Divider />
 
+            {/* Danger zone: inner padding creates contained red zone feel */}
             <div style={{
-              padding: '14px 16px', borderRadius: '12px',
+              padding: '16px', borderRadius: '12px',
               background: T.dangerBg, border: `1px solid ${T.danger}33`,
             }}>
               <div style={{
@@ -420,9 +456,10 @@ export default function Settings() {
                 justifyContent: 'space-between', gap: '16px',
               }}>
                 <div>
+                  {/* 4px between danger title and description */}
                   <div style={{
                     fontSize: '14px', fontWeight: 600,
-                    color: T.danger, marginBottom: '3px',
+                    color: T.danger, marginBottom: '4px',
                   }}>
                     Delete account
                   </div>
@@ -437,6 +474,7 @@ export default function Settings() {
                   variant="danger" size="sm"
                   icon={<Trash2 size={13} />}
                   onClick={() => alert('Account deletion coming soon.')}
+                  style={{ flexShrink: 0 }}
                 >
                   Delete
                 </Button>
@@ -453,27 +491,24 @@ export default function Settings() {
           T={T}
         >
           {[
-            { label: 'Version',       value: 'v4.0.0'            },
-            { label: 'Backend',       value: 'FastAPI + Python'   },
-            { label: 'AI Model',      value: 'LLaMA 3.3 70B'     },
-            { label: 'Transcription', value: 'OpenAI Whisper'     },
-            { label: 'Vector DB',     value: 'ChromaDB'           },
-            { label: 'Embeddings',    value: 'all-MiniLM-L6-v2'  },
-            { label: 'Built by',      value: 'Pankaj Thakur'      },
+            { label: 'Version',       value: 'v4.0.0'           },
+            { label: 'Backend',       value: 'FastAPI + Python'  },
+            { label: 'AI Model',      value: 'LLaMA 3.3 70B'    },
+            { label: 'Transcription', value: 'OpenAI Whisper'    },
+            { label: 'Vector DB',     value: 'ChromaDB'          },
+            { label: 'Embeddings',    value: 'all-MiniLM-L6-v2' },
+            { label: 'Built by',      value: 'Pankaj Thakur'     },
           ].map((item, i, arr) => (
             <div key={item.label}>
+              {/* 14px row padding for readable key-value rows; up from 12px */}
               <div style={{
                 display: 'flex', justifyContent: 'space-between',
-                alignItems: 'center', padding: '12px 0',
+                alignItems: 'center', padding: '14px 0',
               }}>
-                <span style={{
-                  fontSize: '13.5px', fontWeight: 500, color: T.text3,
-                }}>
+                <span style={{ fontSize: '13.5px', fontWeight: 500, color: T.text3 }}>
                   {item.label}
                 </span>
-                <span style={{
-                  fontSize: '13.5px', fontWeight: 650, color: T.text,
-                }}>
+                <span style={{ fontSize: '13.5px', fontWeight: 650, color: T.text }}>
                   {item.value}
                 </span>
               </div>
@@ -484,18 +519,21 @@ export default function Settings() {
           ))}
         </SettingsSection>
 
-        {/* ── Sign out ── */}
+        {/* ── Sign out ────────────────────────────────────────────────────── */}
+        {/* 22px 24px padding: slightly more vertical than horizontal        */}
+        {/* to keep the row feeling balanced at the footer of the page       */}
         <div style={{
-          padding: '20px 24px',
+          padding: '22px 24px',
           background: T.surface, border: `1px solid ${T.border}`,
           borderRadius: '16px', boxShadow: T.cardShadow,
           display: 'flex', alignItems: 'center',
           justifyContent: 'space-between', gap: '16px',
         }}>
           <div>
+            {/* 4px between "Signed in as" label and email */}
             <div style={{
               fontSize: '14px', fontWeight: 600, color: T.text,
-              marginBottom: '2px',
+              marginBottom: '4px',
             }}>
               Signed in as
             </div>
@@ -513,6 +551,7 @@ export default function Settings() {
               border: `1px solid ${T.danger}33`,
               cursor: 'pointer', transition: 'all 0.15s ease',
               fontFamily: 'var(--font)',
+              flexShrink: 0,
             }}
             onMouseEnter={e => e.currentTarget.style.background = T.danger + '22'}
             onMouseLeave={e => e.currentTarget.style.background = T.dangerBg}
