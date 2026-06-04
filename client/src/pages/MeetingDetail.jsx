@@ -5,14 +5,22 @@ import { useParams, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, FileText, Zap, CheckSquare,
   MessageSquare, Tag, Clock, Copy, Check,
-  Download, Share2, BarChart2, Link
+  Download, Share2, BarChart2, Link, Mail
 } from 'lucide-react'
 import { useTheme } from '../ThemeContext'
-import { getMeeting } from '../api/client'
 import {
   Card, Button, Badge,
   EmptyState, Skeleton,
 } from '../components/ui'
+
+import {
+  getMeeting,
+  getMeetingHealth,
+  getMeetingQuotes,
+  getMeetingAITitle,
+  exportMeetingPDF,
+  getFollowupEmail,
+} from '../api/client'
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -165,6 +173,9 @@ function downloadTXT(meeting, intel) {
   URL.revokeObjectURL(url)
 }
 
+
+
+
 // ── Main component ─────────────────────────────────────────────────────────────
 export default function MeetingDetail() {
   const { T }    = useTheme()
@@ -175,13 +186,74 @@ export default function MeetingDetail() {
   const [loading,  setLoading]  = useState(true)
   const [error,    setError]    = useState(null)
   const [linkCopied, setLinkCopied] = useState(false)
+  const [health,  setHealth]  = useState(null)
+  const [quotes,  setQuotes]  = useState([])
+  const [aiTitle, setAiTitle] = useState(null)
+  const [loadingExtras, setLoadingExtras] = useState(false)
+  const [emailModal,    setEmailModal]    = useState(false)
+  const [emailContent,  setEmailContent]  = useState(null)
+  const [emailLoading,  setEmailLoading]  = useState(false)
+  const [pdfLoading,    setPdfLoading]    = useState(false)
+  const [emailCopied,   setEmailCopied]   = useState(false)
+
+  const handlePDFExport = async () => {
+    setPdfLoading(true)
+    try {
+      const blob = await exportMeetingPDF(id)
+      const url  = URL.createObjectURL(blob)
+      const a    = document.createElement('a')
+      a.href     = url
+      a.download = `${meeting?.filename || 'meeting'}_report.pdf`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      alert('PDF export failed: ' + e.message)
+    } finally {
+      setPdfLoading(false)
+    }
+  }
+
+  const handleFollowupEmail = async () => {
+    setEmailLoading(true)
+    setEmailModal(true)
+    setEmailContent(null)
+    try {
+      const res = await getFollowupEmail(id)
+      setEmailContent(res.email)
+    } catch (e) {
+      setEmailContent('Failed to generate email: ' + e.message)
+    } finally {
+      setEmailLoading(false)
+    }
+  }
+
 
   useEffect(() => {
     getMeeting(id)
-      .then(setMeeting)
+      .then(m => {
+        setMeeting(m)
+        // Fetch extras in background after meeting loads
+        fetchExtras(id)
+      })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
   }, [id])
+
+  const fetchExtras = async (meetingId) => {
+    setLoadingExtras(true)
+    try {
+      const [healthData, quotesData, titleData] = await Promise.allSettled([
+        getMeetingHealth(meetingId),
+        getMeetingQuotes(meetingId),
+        getMeetingAITitle(meetingId),
+      ])
+
+      if (healthData.status === 'fulfilled') setHealth(healthData.value)
+      if (quotesData.status === 'fulfilled') setQuotes(quotesData.value.quotes || [])
+      if (titleData.status === 'fulfilled')  setAiTitle(titleData.value.title)
+    } catch {}
+    finally { setLoadingExtras(false) }
+  }
 
   // ── Loading skeleton ───────────────────────────────────────────────────────
   if (loading) return (
@@ -317,6 +389,14 @@ export default function MeetingDetail() {
             <Button
               variant="ghost" size="sm"
               icon={<Download size={13} />}
+              onClick={handlePDFExport}
+              loading={pdfLoading}
+            >
+              Export PDF
+            </Button>
+            <Button
+              variant="ghost" size="sm"
+              icon={<Download size={13} />}
               onClick={() => downloadTXT(meeting, intel)}
             >
               Download TXT
@@ -327,6 +407,14 @@ export default function MeetingDetail() {
               onClick={() => downloadJSON(meeting, intel)}
             >
               Download JSON
+            </Button>
+            <Button
+              variant="ghost" size="sm"
+              icon={<Mail size={13} />}
+              onClick={handleFollowupEmail}
+              loading={emailLoading}
+            >
+              Follow-up Email
             </Button>
             <Button
               size="sm"
@@ -386,6 +474,161 @@ export default function MeetingDetail() {
         ))}
       </div>
 
+
+
+      {/* ── AI Generated Title ── */}
+      {aiTitle && aiTitle !== meeting?.filename && (
+        <div className="anim-fade-up" style={{
+          display: 'inline-flex', alignItems: 'center', gap: '10px',
+          padding: '8px 16px', borderRadius: '99px',
+          background: T.accentBg, border: `1px solid ${T.accent}33`,
+          marginBottom: '20px',
+        }}>
+          <span style={{ fontSize: '13px' }}>✨</span>
+          <span style={{
+            fontSize: '13px', fontWeight: 650, color: T.accentLight,
+          }}>
+            AI Title: {aiTitle}
+          </span>
+        </div>
+      )}
+
+      {/* ── Meeting Health Score ── */}
+      {health && (
+        <div className="anim-fade-up" style={{ marginBottom: '24px' }}>
+          <Card style={{ padding: '24px 28px' }}>
+            <div style={{
+              display: 'flex', alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: '20px', flexWrap: 'wrap', gap: '12px',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <div style={{
+                  width: '34px', height: '34px', borderRadius: '9px',
+                  background: T.emeraldBg,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  <span style={{ fontSize: '18px' }}>❤️</span>
+                </div>
+                <span style={{
+                  fontSize: '16px', fontWeight: 700,
+                  color: T.text, letterSpacing: '-0.02em',
+                }}>
+                  Meeting Health
+                </span>
+              </div>
+
+              {/* Overall score */}
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: '10px',
+              }}>
+                <div style={{
+                  fontSize: '32px', fontWeight: 900,
+                  letterSpacing: '-0.04em',
+                  color: health.overall_score >= 75 ? T.emerald
+                       : health.overall_score >= 50 ? T.warning
+                       : T.danger,
+                }}>
+                  {health.overall_score}
+                </div>
+                <div style={{ fontSize: '14px', color: T.text3 }}>/100</div>
+              </div>
+            </div>
+
+            {/* Score bars */}
+            <div style={{
+              display: 'grid', gridTemplateColumns: '1fr 1fr',
+              gap: '14px', marginBottom: '18px',
+            }}>
+              {[
+                { label: 'Participation',    value: health.participation,    color: T.blue   },
+                { label: 'Decision Quality', value: health.decision_quality, color: T.purple },
+                { label: 'Action Clarity',   value: health.action_clarity,   color: T.orange },
+                { label: 'Follow-up Risk',   value: health.followup_risk,    color: T.emerald},
+              ].map(item => (
+                <div key={item.label}>
+                  <div style={{
+                    display: 'flex', justifyContent: 'space-between',
+                    marginBottom: '6px',
+                  }}>
+                    <span style={{
+                      fontSize: '12px', fontWeight: 600,
+                      color: T.text3,
+                    }}>
+                      {item.label}
+                    </span>
+                    <span style={{
+                      fontSize: '12px', fontWeight: 700,
+                      color: T.text,
+                    }}>
+                      {item.value}
+                    </span>
+                  </div>
+                  <div style={{
+                    height: '6px', borderRadius: '99px',
+                    background: T.surface2, overflow: 'hidden',
+                  }}>
+                    <div style={{
+                      height: '100%', borderRadius: '99px',
+                      width: `${item.value}%`,
+                      background: item.color,
+                      transition: 'width 0.8s ease',
+                    }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Highlights + concerns */}
+            {(health.highlights || health.concerns) && (
+              <div style={{
+                display: 'grid', gridTemplateColumns: '1fr 1fr',
+                gap: '12px',
+              }}>
+                {health.highlights && (
+                  <div style={{
+                    padding: '12px 14px', borderRadius: '10px',
+                    background: T.emeraldBg, border: `1px solid ${T.emerald}22`,
+                  }}>
+                    <div style={{
+                      fontSize: '11px', fontWeight: 700,
+                      color: T.emerald, marginBottom: '5px',
+                      textTransform: 'uppercase', letterSpacing: '0.06em',
+                    }}>
+                      ✓ Highlights
+                    </div>
+                    <div style={{
+                      fontSize: '12.5px', color: T.text2, lineHeight: 1.55,
+                    }}>
+                      {health.highlights}
+                    </div>
+                  </div>
+                )}
+                {health.concerns && (
+                  <div style={{
+                    padding: '12px 14px', borderRadius: '10px',
+                    background: T.warningBg, border: `1px solid ${T.warning}22`,
+                  }}>
+                    <div style={{
+                      fontSize: '11px', fontWeight: 700,
+                      color: T.warning, marginBottom: '5px',
+                      textTransform: 'uppercase', letterSpacing: '0.06em',
+                    }}>
+                      ⚠ To Improve
+                    </div>
+                    <div style={{
+                      fontSize: '12.5px', color: T.text2, lineHeight: 1.55,
+                    }}>
+                      {health.concerns}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </Card>
+        </div>
+      )}
+
       {/* ── No intelligence fallback ── */}
       {!intel ? (
         <Card>
@@ -424,6 +667,64 @@ export default function MeetingDetail() {
                 </p>
               </Card>
             </div>
+
+
+
+
+            {/* Key Quotes */}
+            {quotes.length > 0 && (
+              <div className="anim-fade-up anim-fade-up-2" style={{ marginBottom: '18px' }}>
+                <Card>
+                  <SectionHead
+                    icon={<span style={{ fontSize: '16px' }}>💬</span>}
+                    title="Key Quotes"
+                    count={quotes.length}
+                    color={T.cyanText}
+                    bg={T.cyanBg}
+                  />
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    {quotes.map((q, i) => (
+                      <div key={i} style={{
+                        padding: '14px 16px', borderRadius: '10px',
+                        background: T.surface2,
+                        border: `1px solid ${T.border}`,
+                        borderLeft: `3px solid ${T.accent}`,
+                      }}>
+                        <div style={{
+                          fontSize: '14px', fontWeight: 500,
+                          color: T.text, lineHeight: 1.6,
+                          fontStyle: 'italic',
+                          marginBottom: q.speaker || q.context ? '8px' : 0,
+                        }}>
+                          "{q.quote}"
+                        </div>
+                        <div style={{
+                          display: 'flex', flexWrap: 'wrap',
+                          gap: '10px', alignItems: 'center',
+                        }}>
+                          {q.speaker && (
+                            <span style={{
+                              fontSize: '12px', fontWeight: 650,
+                              color: T.accentLight,
+                            }}>
+                              — {q.speaker}
+                            </span>
+                          )}
+                          {q.context && (
+                            <span style={{
+                              fontSize: '12px', color: T.text3,
+                            }}>
+                              {q.context}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+              </div>
+            )}
+
 
             {/* Decisions */}
             <div className="anim-fade-up anim-fade-up-3">
@@ -618,6 +919,133 @@ export default function MeetingDetail() {
               </Card>
             </div>
 
+          </div>
+        </div>
+      )}
+      {/* ── Follow-up Email Modal ── */}
+      {emailModal && (
+        <div style={{
+          position: 'fixed', inset: 0,
+          background: 'rgba(0,0,0,0.7)',
+          backdropFilter: 'blur(8px)',
+          display: 'flex', alignItems: 'center',
+          justifyContent: 'center', zIndex: 999,
+          padding: '24px',
+        }}>
+          <div className="anim-fade-up" style={{
+            background: T.surface,
+            border: `1px solid ${T.border}`,
+            borderRadius: '20px',
+            width: '100%', maxWidth: '640px',
+            maxHeight: '80vh',
+            display: 'flex', flexDirection: 'column',
+            boxShadow: '0 32px 80px rgba(0,0,0,0.4)',
+          }}>
+
+            {/* Modal header */}
+            <div style={{
+              padding: '20px 24px',
+              borderBottom: `1px solid ${T.border}`,
+              display: 'flex', alignItems: 'center',
+              justifyContent: 'space-between',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '11px' }}>
+                <div style={{
+                  width: '34px', height: '34px', borderRadius: '9px',
+                  background: T.accentBg,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  <Mail size={17} color={T.accentLight} />
+                </div>
+                <div>
+                  <div style={{
+                    fontSize: '15px', fontWeight: 700,
+                    color: T.text, letterSpacing: '-0.02em',
+                  }}>
+                    Follow-up Email
+                  </div>
+                  <div style={{ fontSize: '12px', color: T.text3 }}>
+                    AI generated · ready to send
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setEmailModal(false)
+                  setEmailContent(null)
+                  setEmailCopied(false)
+                }}
+                style={{
+                  background: T.surface2, border: `1px solid ${T.border}`,
+                  borderRadius: '8px', width: '30px', height: '30px',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  cursor: 'pointer', color: T.text3, fontSize: '16px',
+                  transition: 'all 0.15s ease',
+                }}
+                onMouseEnter={e => e.currentTarget.style.color = T.text}
+                onMouseLeave={e => e.currentTarget.style.color = T.text3}
+              >
+                ×
+              </button>
+            </div>
+
+            {/* Modal content */}
+            <div style={{
+              flex: 1, overflowY: 'auto', padding: '20px 24px',
+            }}>
+              {emailLoading ? (
+                <div style={{
+                  display: 'flex', flexDirection: 'column',
+                  alignItems: 'center', justifyContent: 'center',
+                  padding: '48px', gap: '16px',
+                }}>
+                  <div className="spinner" style={{
+                    width: '24px', height: '24px',
+                    borderColor: T.accent,
+                    borderTopColor: 'transparent',
+                  }} />
+                  <div style={{ fontSize: '14px', color: T.text3 }}>
+                    Generating follow-up email...
+                  </div>
+                </div>
+              ) : (
+                <pre style={{
+                  fontSize: '13.5px', color: T.text2,
+                  lineHeight: 1.75, whiteSpace: 'pre-wrap',
+                  fontFamily: 'var(--font)', margin: 0,
+                }}>
+                  {emailContent}
+                </pre>
+              )}
+            </div>
+
+            {/* Modal footer */}
+            {emailContent && !emailLoading && (
+              <div style={{
+                padding: '16px 24px',
+                borderTop: `1px solid ${T.border}`,
+                display: 'flex', gap: '10px',
+                justifyContent: 'flex-end',
+              }}>
+                <Button
+                  variant="ghost" size="sm"
+                  onClick={() => handleFollowupEmail()}
+                >
+                  Regenerate
+                </Button>
+                <Button
+                  size="sm"
+                  icon={emailCopied ? <Check size={13} /> : <Copy size={13} />}
+                  onClick={() => {
+                    navigator.clipboard.writeText(emailContent)
+                    setEmailCopied(true)
+                    setTimeout(() => setEmailCopied(false), 2000)
+                  }}
+                >
+                  {emailCopied ? 'Copied!' : 'Copy Email'}
+                </Button>
+              </div>
+            )}
           </div>
         </div>
       )}

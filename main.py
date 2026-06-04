@@ -38,6 +38,32 @@ from core.intelligence.workflow import analyze_transcript
 from core.rag.indexer import index_meeting
 from core.rag.chat import chat_with_meeting, chat_across_meetings
 
+
+from core.intelligence.health  import analyze_meeting_health
+from core.intelligence.quotes  import extract_key_quotes
+from core.intelligence.titles  import generate_meeting_title
+from core.database import (
+    init_db,
+    get_all_transcripts,
+    save_transcript_and_get_id,
+    save_meeting_intelligence,
+    get_meeting_intelligence,
+    get_meeting_by_id,
+    save_meeting_health,
+    get_meeting_health,
+    save_meeting_quotes,
+    get_meeting_quotes,
+    save_meeting_title,
+    get_meeting_title,
+    update_action_item_status,
+)
+
+
+from core.intelligence.followup import generate_followup_email
+from core.database import get_meeting_title
+from fastapi.responses import StreamingResponse
+import io
+
 # =====================================================
 # LOGGING
 # =====================================================
@@ -909,6 +935,427 @@ async def contact(request: ContactRequest):
 
 
 
+
+# =====================================================
+# PHASE 6 — ADVANCED INTELLIGENCE ENDPOINTS
+# =====================================================
+
+@app.get("/meetings/{meeting_id}/health", tags=["Intelligence"])
+def get_health_score(
+    meeting_id: int,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Get or generate meeting health score.
+    Generates on first call, returns cached on subsequent calls.
+    """
+    meeting = get_meeting_by_id(meeting_id, user_id=current_user.id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    # Return cached if exists
+    cached = get_meeting_health(meeting_id)
+    if cached:
+        return cached
+
+    # Generate fresh
+    intel = get_meeting_intelligence(meeting_id)
+    if not intel:
+        raise HTTPException(
+            status_code=404,
+            detail="No intelligence data found. Process meeting first."
+        )
+
+    health = analyze_meeting_health(
+        transcript=meeting["transcript"],
+        intelligence=intel,
+    )
+    save_meeting_health(meeting_id, health)
+    return health
+
+
+@app.get("/meetings/{meeting_id}/quotes", tags=["Intelligence"])
+def get_quotes(
+    meeting_id: int,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Get or generate key quotes for a meeting.
+    """
+    meeting = get_meeting_by_id(meeting_id, user_id=current_user.id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    # Return cached
+    cached = get_meeting_quotes(meeting_id)
+    if cached:
+        return {"quotes": cached}
+
+    # Generate fresh
+    quotes = extract_key_quotes(meeting["transcript"])
+    save_meeting_quotes(meeting_id, quotes)
+    return {"quotes": quotes}
+
+
+@app.get("/meetings/{meeting_id}/title", tags=["Intelligence"])
+def get_ai_title(
+    meeting_id: int,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Get or generate an AI meeting title.
+    """
+    meeting = get_meeting_by_id(meeting_id, user_id=current_user.id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    cached = get_meeting_title(meeting_id)
+    if cached:
+        return {"title": cached}
+
+    intel = get_meeting_intelligence(meeting_id)
+    summary = intel.get("summary", "") if intel else ""
+
+    title = generate_meeting_title(
+        transcript=meeting["transcript"],
+        summary=summary,
+    )
+    save_meeting_title(meeting_id, title)
+    return {"title": title}
+
+
+@app.put("/tasks/{item_id}/status", tags=["Intelligence"])
+def update_task_status(
+    item_id: int,
+    body: dict,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Update action item status.
+    Body: { "status": "open" | "in_progress" | "done" | "overdue" }
+    """
+    status = body.get("status", "").lower()
+    valid  = {"open", "in_progress", "done", "overdue"}
+
+    if status not in valid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status. Must be one of: {valid}"
+        )
+
+    updated = update_action_item_status(item_id, status, current_user.id)
+    if not updated:
+        raise HTTPException(
+            status_code=404,
+            detail="Action item not found or access denied"
+        )
+
+    return {"message": "Status updated", "status": status}
+
+
+
+
+
+
+# =====================================================
+# PHASE 7 — PDF EXPORT + FOLLOW-UP EMAIL
+# =====================================================
+@app.get("/meetings/{meeting_id}/export/pdf", tags=["Export"])
+def export_pdf(
+    meeting_id:   int,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Generate and stream a formatted PDF report for a meeting.
+    """
+    from reportlab.lib.pagesizes  import A4
+    from reportlab.lib.styles     import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units      import cm
+    from reportlab.lib            import colors
+    from reportlab.platypus       import (
+        SimpleDocTemplate, Paragraph, Spacer,
+        HRFlowable, Table, TableStyle,
+    )
+    from reportlab.lib.enums      import TA_LEFT, TA_CENTER
+ 
+    # -- Fetch data -------------------------------------------------------------
+    meeting = get_meeting_by_id(meeting_id, user_id=current_user.id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+ 
+    intel    = get_meeting_intelligence(meeting_id)
+    health   = get_meeting_health(meeting_id)
+    quotes   = get_meeting_quotes(meeting_id)
+    ai_title = get_meeting_title(meeting_id)
+ 
+    title = ai_title or meeting.get("filename", "Meeting Report")
+ 
+    # -- Build PDF -------------------------------------------------------------
+    buffer = io.BytesIO()
+ 
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        rightMargin=2*cm, leftMargin=2*cm,
+        topMargin=2*cm,   bottomMargin=2*cm,
+    )
+ 
+    styles = getSampleStyleSheet()
+    W = A4[0] - 4*cm  # usable width
+ 
+    # -- Custom styles ---------------------------------------------------------
+    def style(name, **kw):
+        return ParagraphStyle(name, parent=styles['Normal'], **kw)
+ 
+    S_title   = style('T',  fontSize=22, fontName='Helvetica-Bold',
+                      textColor=colors.HexColor('#0e1117'), spaceAfter=4,
+                      alignment=TA_LEFT)
+    S_meta    = style('M',  fontSize=10, textColor=colors.HexColor('#6b748f'),
+                      spaceAfter=4)
+    S_section = style('S',  fontSize=13, fontName='Helvetica-Bold',
+                      textColor=colors.HexColor('#4f46e5'),
+                      spaceBefore=24, spaceAfter=10)
+    S_body    = style('B',  fontSize=10, leading=16,
+                      textColor=colors.HexColor('#2e3650'), spaceAfter=4)
+    S_bullet  = style('BL', fontSize=10, leading=15,
+                      textColor=colors.HexColor('#2e3650'),
+                      leftIndent=14, spaceAfter=3)
+    S_quote   = style('Q',  fontSize=10, leading=15,
+                      textColor=colors.HexColor('#4f46e5'),
+                      leftIndent=14, fontName='Helvetica-Oblique', spaceAfter=4)
+    S_label   = style('L',  fontSize=9,  fontName='Helvetica-Bold',
+                      textColor=colors.HexColor('#9aa3bc'), spaceAfter=2)
+ 
+    gray = colors.HexColor('#e2e8f0')
+ 
+    def hr():
+        return HRFlowable(
+            width='100%', thickness=1,
+            color=gray, spaceAfter=10, spaceBefore=10,
+        )
+ 
+    def section(text):
+        return Paragraph(text, S_section)
+ 
+    def body(text):
+        return Paragraph(text, S_body)
+ 
+    def bullet(text):
+        return Paragraph(f"- {text}", S_bullet)
+ 
+    def label(text):
+        return Paragraph(text, S_label)
+ 
+    story = []
+ 
+    # -- Cover -----------------------------------------------------------------
+    story.append(Table(
+        [[Paragraph(title, S_title)]],
+        colWidths=[W],
+        style=TableStyle([
+            ('BACKGROUND',    (0,0), (-1,-1), colors.HexColor('#f5f7ff')),
+            ('TOPPADDING',    (0,0), (-1,-1), 14),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 14),
+            ('LEFTPADDING',   (0,0), (-1,-1), 16),
+            ('RIGHTPADDING',  (0,0), (-1,-1), 16),
+            ('BOX',           (0,0), (-1,-1), 1, colors.HexColor('#dde3f0')),
+        ]),
+    ))
+    story.append(Spacer(1, 10))
+ 
+    story.append(Paragraph(
+        f"{meeting.get('created_at', '')[:10]}   |   "
+        f"{meeting.get('filename', '')}   |   "
+        f"AI Generated Report",
+        S_meta,
+    ))
+ 
+    if health:
+        score = health.get("overall_score", 0)
+        score_color = (
+            '#10b981' if score >= 75 else
+            '#f59e0b' if score >= 50 else
+            '#ef4444'
+        )
+        story.append(Paragraph(
+            f"Meeting Health Score: "
+            f"<font color='{score_color}'><b>{score}/100</b></font>",
+            S_meta,
+        ))
+ 
+    story.append(Spacer(1, 6))
+    story.append(hr())
+ 
+    # -- Summary ---------------------------------------------------------------
+    if intel and intel.get("summary"):
+        story.append(section("Executive Summary"))
+        story.append(body(intel["summary"]))
+        story.append(hr())
+ 
+    # -- Topics ----------------------------------------------------------------
+    if intel and intel.get("topics"):
+        story.append(section("Topics Discussed"))
+        topics_str = "   |   ".join([t["title"] for t in intel["topics"]])
+        story.append(body(topics_str))
+        story.append(hr())
+ 
+    # -- Decisions -------------------------------------------------------------
+    if intel and intel.get("decisions"):
+        story.append(section("Decisions Made"))
+        for d in intel["decisions"]:
+            story.append(bullet(d["decision"]))
+            if d.get("rationale"):
+                story.append(Paragraph(f"  {d['rationale']}", S_label))
+        story.append(hr())
+ 
+    # -- Action Items ----------------------------------------------------------
+    if intel and intel.get("action_items"):
+        story.append(section("Action Items"))
+ 
+        data = [["Task", "Owner", "Deadline", "Priority"]]
+        for item in intel["action_items"]:
+            data.append([
+                item.get("task",     "-"),
+                item.get("owner",    "-") or "-",
+                item.get("deadline", "-") or "-",
+                (item.get("priority") or "medium").title(),
+            ])
+ 
+        col_w = [W*0.45, W*0.2, W*0.2, W*0.15]
+        t = Table(data, colWidths=col_w)
+        t.setStyle(TableStyle([
+            ('BACKGROUND',     (0,0), (-1,0),  colors.HexColor('#f5f7ff')),
+            ('TEXTCOLOR',      (0,0), (-1,0),  colors.HexColor('#4f46e5')),
+            ('FONTNAME',       (0,0), (-1,0),  'Helvetica-Bold'),
+            ('FONTSIZE',       (0,0), (-1,-1), 9),
+            ('ROWBACKGROUNDS', (0,1), (-1,-1),
+             [colors.white, colors.HexColor('#f9faff')]),
+            ('GRID',           (0,0), (-1,-1), 0.5, colors.HexColor('#e2e8f0')),
+            ('TOPPADDING',     (0,0), (-1,-1), 7),
+            ('BOTTOMPADDING',  (0,0), (-1,-1), 7),
+            ('LEFTPADDING',    (0,0), (-1,-1), 8),
+            ('RIGHTPADDING',   (0,0), (-1,-1), 8),
+            ('ALIGN',          (0,0), (-1,-1), 'LEFT'),
+            ('VALIGN',         (0,0), (-1,-1), 'MIDDLE'),
+        ]))
+        story.append(t)
+        story.append(hr())
+ 
+    # -- Key Quotes ------------------------------------------------------------
+    if quotes:
+        story.append(section("Key Quotes"))
+        for q in quotes:
+            story.append(Paragraph(f'"{q["quote"]}"', S_quote))
+            if q.get("speaker"):
+                story.append(Paragraph(
+                    f"- {q['speaker']}"
+                    + (f"  |  {q['context']}" if q.get("context") else ""),
+                    S_label,
+                ))
+            story.append(Spacer(1, 4))
+        story.append(hr())
+ 
+    # -- Health Detail ---------------------------------------------------------
+    if health:
+        story.append(section("Meeting Health Analysis"))
+        health_data = [
+            ["Metric",          "Score"],
+            ["Participation",   f"{health['participation']}/100"],
+            ["Decision Quality",f"{health['decision_quality']}/100"],
+            ["Action Clarity",  f"{health['action_clarity']}/100"],
+            ["Follow-up Risk",  f"{health['followup_risk']}/100"],
+            ["Overall Score",   f"{health['overall_score']}/100"],
+        ]
+        ht = Table(health_data, colWidths=[W*0.6, W*0.4])
+        ht.setStyle(TableStyle([
+            ('BACKGROUND',     (0,0),  (-1,0),  colors.HexColor('#f5f7ff')),
+            ('TEXTCOLOR',      (0,0),  (-1,0),  colors.HexColor('#4f46e5')),
+            ('FONTNAME',       (0,0),  (-1,0),  'Helvetica-Bold'),
+            ('FONTNAME',       (0,-1), (-1,-1), 'Helvetica-Bold'),
+            ('FONTSIZE',       (0,0),  (-1,-1), 9),
+            ('GRID',           (0,0),  (-1,-1), 0.5, colors.HexColor('#e2e8f0')),
+            ('ROWBACKGROUNDS', (0,1),  (-1,-2),
+             [colors.white, colors.HexColor('#f9faff')]),
+            ('TOPPADDING',     (0,0),  (-1,-1), 7),
+            ('BOTTOMPADDING',  (0,0),  (-1,-1), 7),
+            ('LEFTPADDING',    (0,0),  (-1,-1), 8),
+            ('RIGHTPADDING',   (0,0),  (-1,-1), 8),
+        ]))
+        story.append(ht)
+ 
+        if health.get("highlights"):
+            story.append(Spacer(1, 8))
+            story.append(label("Highlights"))
+            story.append(body(health["highlights"]))
+        if health.get("concerns"):
+            story.append(Spacer(1, 4))
+            story.append(label("To Improve"))
+            story.append(body(health["concerns"]))
+ 
+        story.append(hr())
+ 
+    # -- Transcript ------------------------------------------------------------
+    transcript = meeting.get("transcript", "")
+    if transcript:
+        story.append(section("Transcript"))
+        for para in transcript.split('\n'):
+            para = para.strip()
+            if para:
+                story.append(body(para))
+ 
+    # -- Footer ----------------------------------------------------------------
+    story.append(Spacer(1, 16))
+    story.append(hr())
+    story.append(Paragraph(
+        "Generated by Summly  |  AI Meeting Intelligence Platform  |  summly.ai",
+        S_meta,
+    ))
+ 
+    # -- Build -----------------------------------------------------------------
+    doc.build(story)
+    buffer.seek(0)
+ 
+    safe_name = (title or "meeting").replace(" ", "_")[:40]
+ 
+    return StreamingResponse(
+        buffer,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_name}_report.pdf"'
+        },
+    )
+
+
+@app.get("/meetings/{meeting_id}/followup-email", tags=["Export"])
+def get_followup_email(
+    meeting_id:   int,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Generate a follow-up email for a meeting.
+    """
+    meeting = get_meeting_by_id(meeting_id, user_id=current_user.id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    intel = get_meeting_intelligence(meeting_id)
+    if not intel:
+        raise HTTPException(
+            status_code=404,
+            detail="No intelligence data found."
+        )
+
+    ai_title = get_meeting_title(meeting_id)
+    title    = ai_title or meeting.get("filename", "Our Meeting")
+
+    email = generate_followup_email(
+        meeting_title=title,
+        intelligence=intel,
+    )
+
+    return {"email": email, "title": title}
+
+    
 
 # =====================================================
 # ERROR HANDLERS

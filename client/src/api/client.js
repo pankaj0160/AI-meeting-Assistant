@@ -177,3 +177,39 @@ export async function sendContactForm(name, email, subject, message) {
     body: JSON.stringify({ name, email, subject, message }),
   })
 }
+
+// ── Phase 6 — Advanced Intelligence ───────────────────────────────────────────
+
+export async function getMeetingHealth(id) {
+  return request(`/meetings/${id}/health`)
+}
+
+export async function getMeetingQuotes(id) {
+  return request(`/meetings/${id}/quotes`)
+}
+
+export async function getMeetingAITitle(id) {
+  return request(`/meetings/${id}/title`)
+}
+
+export async function updateTaskStatus(itemId, status) {
+  return request(`/tasks/${itemId}/status`, {
+    method: 'PUT',
+    body: JSON.stringify({ status }),
+  })
+}
+
+// ── Phase 7 — Export ──────────────────────────────────────────────────────────
+
+export async function exportMeetingPDF(id) {
+  const token = getToken()
+  const res = await fetch(`/api/meetings/${id}/export/pdf`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  })
+  if (!res.ok) throw new Error('PDF export failed')
+  return res.blob()
+}
+
+export async function getFollowupEmail(id) {
+  return request(`/meetings/${id}/followup-email`)
+}

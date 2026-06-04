@@ -3,8 +3,59 @@
 import { useState, useEffect } from 'react'
 import { CheckSquare, Filter } from 'lucide-react'
 import { useTheme } from '../ThemeContext'
-import { getMeetings, getMeetingIntelligence } from '../api/client'
 import { PageHeader, Card, Badge, EmptyState, Skeleton, SectionLabel } from '../components/ui'
+import { getMeetings, getMeetingIntelligence, updateTaskStatus } from '../api/client'
+
+
+function StatusPicker({ taskId, status, T, onUpdate }) {
+  const [updating, setUpdating] = useState(false)
+
+  const options = [
+    { value: 'open',        label: 'Open',        color: T.warning, bg: T.warningBg  },
+    { value: 'in_progress', label: 'In Progress',  color: T.blue,    bg: T.blueBg     },
+    { value: 'done',        label: 'Done',         color: T.emerald, bg: T.emeraldBg  },
+    { value: 'overdue',     label: 'Overdue',      color: T.danger,  bg: T.dangerBg   },
+  ]
+
+  const current = options.find(o => o.value === status) || options[0]
+
+  const handleChange = async (e) => {
+    const newStatus = e.target.value
+    setUpdating(true)
+    try {
+      await updateTaskStatus(taskId, newStatus)
+      onUpdate(newStatus)
+    } catch {}
+    finally { setUpdating(false) }
+  }
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <select
+        value={status}
+        onChange={handleChange}
+        disabled={updating || !taskId}
+        style={{
+          padding: '4px 10px',
+          borderRadius: '99px',
+          fontSize: '12px', fontWeight: 700,
+          color: current.color,
+          background: current.bg,
+          border: `1px solid ${current.color}33`,
+          cursor: taskId ? 'pointer' : 'default',
+          appearance: 'none',
+          outline: 'none',
+          fontFamily: 'var(--font)',
+          opacity: updating ? 0.6 : 1,
+        }}
+      >
+        {options.map(o => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
+    </div>
+  )
+}
 
 export default function Tasks() {
   const { T } = useTheme()
@@ -22,9 +73,14 @@ export default function Tasks() {
             try {
               const intel = await getMeetingIntelligence(m.id)
               if (intel?.action_items) {
-                intel.action_items.forEach(item => {
-                  all.push({ ...item, meetingId: m.id, meetingName: m.filename })
+                intel.action_items.forEach((item, idx) => {
+                all.push({
+                  ...item,
+                  id:          item.id || null,
+                  meetingId:   m.id,
+                  meetingName: m.filename,
                 })
+              })
               }
             } catch {}
           })
@@ -169,12 +225,16 @@ export default function Tasks() {
                       </Badge>
                     </div>
                     <div>
-                      <Badge
-                        color={task.status === 'open' ? T.warning : T.emerald}
-                        bg={task.status === 'open' ? T.warningBg : T.emeraldBg}
-                      >
-                        {task.status || 'open'}
-                      </Badge>
+                      <StatusPicker
+                        taskId={task.id}
+                        status={task.status || 'open'}
+                        T={T}
+                        onUpdate={(newStatus) => {
+                          setTasks(prev => prev.map(t =>
+                            t.id === task.id ? { ...t, status: newStatus } : t
+                          ))
+                        }}
+                      />
                     </div>
                   </div>
                 </div>

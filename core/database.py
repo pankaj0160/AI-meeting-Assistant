@@ -181,6 +181,44 @@ def _init_intelligence_tables(conn):
         )
     """)
 
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS meeting_health (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            meeting_id      INTEGER NOT NULL UNIQUE,
+            overall_score   INTEGER NOT NULL,
+            participation   INTEGER NOT NULL,
+            decision_quality INTEGER NOT NULL,
+            action_clarity  INTEGER NOT NULL,
+            followup_risk   INTEGER NOT NULL,
+            highlights      TEXT,
+            concerns        TEXT,
+            created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (meeting_id) REFERENCES meetings(id)
+        )
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS meeting_quotes (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            meeting_id INTEGER NOT NULL,
+            quote      TEXT NOT NULL,
+            speaker    TEXT,
+            context    TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (meeting_id) REFERENCES meetings(id)
+        )
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS meeting_titles (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            meeting_id INTEGER NOT NULL UNIQUE,
+            title      TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (meeting_id) REFERENCES meetings(id)
+        )
+    """)
+
 
 # ─── Phase 2 — public functions ───────────────────────────────────────────────
 def save_transcript_and_get_id(
@@ -410,3 +448,129 @@ def get_all_meetings_for_indexing(user_id: int = None) -> list[dict]:
         for row in rows
         if row[2]
     ]
+
+
+
+# ─── Phase 6 — Health, Quotes, Titles ────────────────────────────────────────
+
+def save_meeting_health(meeting_id: int, health: dict) -> None:
+    conn = sqlite3.connect(DB_NAME)
+    conn.execute("DELETE FROM meeting_health WHERE meeting_id = ?", (meeting_id,))
+    conn.execute(
+        """
+        INSERT INTO meeting_health
+            (meeting_id, overall_score, participation, decision_quality,
+             action_clarity, followup_risk, highlights, concerns)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            meeting_id,
+            health["overall_score"],
+            health["participation"],
+            health["decision_quality"],
+            health["action_clarity"],
+            health["followup_risk"],
+            health.get("highlights", ""),
+            health.get("concerns", ""),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_meeting_health(meeting_id: int) -> dict | None:
+    conn = sqlite3.connect(DB_NAME)
+    row = conn.execute(
+        "SELECT * FROM meeting_health WHERE meeting_id = ?",
+        (meeting_id,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {
+        "overall_score":    row[2],
+        "participation":    row[3],
+        "decision_quality": row[4],
+        "action_clarity":   row[5],
+        "followup_risk":    row[6],
+        "highlights":       row[7],
+        "concerns":         row[8],
+    }
+
+
+def save_meeting_quotes(meeting_id: int, quotes: list[dict]) -> None:
+    conn = sqlite3.connect(DB_NAME)
+    conn.execute("DELETE FROM meeting_quotes WHERE meeting_id = ?", (meeting_id,))
+    for q in quotes:
+        conn.execute(
+            """
+            INSERT INTO meeting_quotes (meeting_id, quote, speaker, context)
+            VALUES (?, ?, ?, ?)
+            """,
+            (meeting_id, q["quote"], q.get("speaker"), q.get("context")),
+        )
+    conn.commit()
+    conn.close()
+
+
+def get_meeting_quotes(meeting_id: int) -> list[dict]:
+    conn = sqlite3.connect(DB_NAME)
+    rows = conn.execute(
+        "SELECT quote, speaker, context FROM meeting_quotes WHERE meeting_id = ?",
+        (meeting_id,)
+    ).fetchall()
+    conn.close()
+    return [
+        {"quote": r[0], "speaker": r[1], "context": r[2]}
+        for r in rows
+    ]
+
+
+def save_meeting_title(meeting_id: int, title: str) -> None:
+    conn = sqlite3.connect(DB_NAME)
+    conn.execute("DELETE FROM meeting_titles WHERE meeting_id = ?", (meeting_id,))
+    conn.execute(
+        "INSERT INTO meeting_titles (meeting_id, title) VALUES (?, ?)",
+        (meeting_id, title),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_meeting_title(meeting_id: int) -> str | None:
+    conn = sqlite3.connect(DB_NAME)
+    row = conn.execute(
+        "SELECT title FROM meeting_titles WHERE meeting_id = ?",
+        (meeting_id,)
+    ).fetchone()
+    conn.close()
+    return row[0] if row else None
+
+
+def update_action_item_status(item_id: int, status: str, user_id: int) -> bool:
+    """
+    Update action item status.
+    Verifies the item belongs to a meeting owned by user_id.
+    Returns True if updated, False if not found or unauthorized.
+    """
+    conn = sqlite3.connect(DB_NAME)
+    row = conn.execute(
+        """
+        SELECT ai.id FROM action_items ai
+        JOIN meetings m ON m.id = ai.meeting_id
+        WHERE ai.id = ? AND m.user_id = ?
+        """,
+        (item_id, user_id)
+    ).fetchone()
+
+    if not row:
+        conn.close()
+        return False
+
+    conn.execute(
+        "UPDATE action_items SET status = ? WHERE id = ?",
+        (status, item_id)
+    )
+    conn.commit()
+    conn.close()
+    return True
