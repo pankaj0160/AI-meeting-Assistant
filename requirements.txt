@@ -40,3 +40,7 @@ pycparser==3.0
 python-jose==3.5.0
 rsa==4.9.1
 
+librosa>=0.10.0          # Audio processing
+soundfile>=0.12.1        # Write audio files
+numpy>=1.24.0            # Numerical operations
+scipy>=1.11.0            # Scientific computing

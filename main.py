@@ -3,7 +3,7 @@ Summly FastAPI Backend
 Phase 2 Complete with Meeting Intelligence Engine
 """
 
-
+from core.transcription.audio_cleaner import AudioCleaner
 import datetime
 from core.auth.dependencies import get_current_user, get_optional_user
 from core.auth.models import User
@@ -258,6 +258,7 @@ def health():
 async def upload_file(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
+    enable_audio_cleaning: bool = Query(default=True, description="Enable audio noise reduction and normalization"),
 ):
     """
     Upload and process an audio or video file.
@@ -300,12 +301,29 @@ async def upload_file(
     logger.info(f"Processing file: {file.filename} ({file_size_mb} MB)")
     
     try:
-        # Convert video to wav if needed
+    # Convert video to wav if needed
         if ext in VIDEO_EXTENSIONS:
             logger.info("Extracting audio from video...")
-            wav_file = extract_audio(str(file_path))
+            wav_file = extract_audio(str(file_path), enable_cleaning=enable_audio_cleaning)
         else:
             wav_file = str(file_path)
+            
+            # Also clean audio files if they're direct uploads
+            if enable_audio_cleaning:
+                try:
+                    logger.info("Cleaning uploaded audio file...")
+                    from core.transcription.audio_cleaner import AudioCleaner
+                    cleaner = AudioCleaner(sr=16000)
+                    result = cleaner.clean_audio(
+                        wav_file,
+                        output_path=wav_file,
+                        enable_noise_reduction=True,
+                        enable_compression=True,
+                        save_output=True
+                    )
+                    logger.info(f"✓ Audio cleaned - SNR improvement: {result['snr_improvement_db']:+.1f}dB")
+                except Exception as e:
+                    logger.warning(f"Audio cleaning failed (non-fatal): {e}")
         
         # Transcribe
         logger.info("Transcribing audio...")
@@ -372,6 +390,7 @@ async def upload_file(
 async def process_youtube(
     request: YouTubeRequest,
     current_user: User = Depends(get_current_user),
+    enable_audio_cleaning: bool = Query(default=True, description="Enable audio noise reduction"),
 ):
     """
     Download, transcribe, and analyze YouTube video.
@@ -393,7 +412,7 @@ async def process_youtube(
         
         # Convert mp3 to wav
         logger.info("Converting audio format...")
-        wav_file = extract_audio(mp3_file)
+        wav_file = extract_audio(mp3_file, enable_cleaning=request.enable_audio_cleaning)
         
         # Transcribe
         logger.info("Transcribing audio...")
@@ -768,6 +787,7 @@ async def upload_file_with_progress(
     file:   UploadFile = File(...),
     job_id: str = Query(default=None),
     current_user: User = Depends(get_current_user),
+    enable_audio_cleaning: bool = Query(default=True),
 ):
     """
     Upload endpoint that streams progress over WebSocket.
@@ -794,7 +814,7 @@ async def upload_file_with_progress(
 
     def do_transcribe():
         if ext in VIDEO_EXTENSIONS:
-            wav = extract_audio(str(file_path))
+            wav = extract_audio(str(file_path), enable_cleaning=enable_audio_cleaning)
         else:
             wav = str(file_path)
         return transcribe_audio(wav)
@@ -824,6 +844,7 @@ async def youtube_with_progress(
     request: dict,
     job_id: str = None,
     current_user: User = Depends(get_current_user),
+    enable_audio_cleaning: bool = Query(default=True),
 ):
     """
     YouTube endpoint that streams progress over WebSocket.
@@ -836,7 +857,7 @@ async def youtube_with_progress(
 
     def do_transcribe():
         yt_data = download_youtube(str(url))
-        wav     = extract_audio(yt_data["audio_file"])
+        wav     = extract_audio(yt_data["audio_file"], enable_cleaning=enable_audio_cleaning)
         return transcribe_audio(wav), yt_data["title"]
 
     # Run download+transcribe in thread

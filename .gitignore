@@ -64,6 +64,13 @@ backend/data/*.db
 *.sqlite
 *.sqlite3
 
+meetings.db
+chroma_db/
+uploads/audio/
+uploads/video/
+uploads/transcripts/
+uploads/
+
 # ==========================================
 
 # Generated Uploads
@@ -148,3 +155,8 @@ models/
 *.tmp
 *.temp
 *.bak
+
+1.11.0
+contact_submissions.json
+
+
