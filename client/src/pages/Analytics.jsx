@@ -3,11 +3,11 @@
 import { useState, useEffect } from 'react'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip,
-  ResponsiveContainer, CartesianGrid, LineChart, Line
+  ResponsiveContainer, CartesianGrid,
 } from 'recharts'
 import { useTheme } from '../ThemeContext'
 import { getMeetings, getMeetingIntelligence } from '../api/client'
-import { PageHeader, Card, StatCard, SectionLabel, EmptyState, Skeleton } from '../components/ui'
+import { PageHeader, Card, StatCard, EmptyState, Skeleton } from '../components/ui'
 
 export default function Analytics() {
   const { T } = useTheme()
@@ -21,7 +21,6 @@ export default function Analytics() {
         let totalDecisions = 0
         let totalActions   = 0
         let totalTopics    = 0
-
         const weekMap = {}
 
         await Promise.all(
@@ -29,11 +28,10 @@ export default function Analytics() {
             try {
               const intel = await getMeetingIntelligence(m.id)
               if (intel) {
-                totalDecisions += intel.decisions?.length   || 0
+                totalDecisions += intel.decisions?.length    || 0
                 totalActions   += intel.action_items?.length || 0
-                totalTopics    += intel.topics?.length      || 0
+                totalTopics    += intel.topics?.length       || 0
               }
-              // Group by week
               const week = m.created_at
                 ? new Date(m.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
                 : 'Unknown'
@@ -46,14 +44,7 @@ export default function Analytics() {
           .slice(-8)
           .map(([date, count]) => ({ date, meetings: count }))
 
-        setData({
-          total: meetings.length,
-          decisions: totalDecisions,
-          actions: totalActions,
-          topics: totalTopics,
-          weeklyData,
-          meetings,
-        })
+        setData({ total: meetings.length, decisions: totalDecisions, actions: totalActions, topics: totalTopics, weeklyData })
       } catch {}
       finally { setLoading(false) }
     }
@@ -66,19 +57,26 @@ export default function Analytics() {
     borderRadius: '10px',
     color: T.text,
     fontSize: '13px',
-    textAlign: 'center',
     fontFamily: 'var(--font)',
     boxShadow: T.cardShadow,
   }
 
   if (loading) return (
-    <div>
+    <div style={{ maxWidth: '1000px', margin: '0 auto' }}>
       <PageHeader title="Analytics" subtitle="Loading data..." />
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '32px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '14px', marginBottom: '28px' }}>
         {[1,2,3,4].map(i => (
-          <Card key={i}>
-            <Skeleton width="60%" height="12px" style={{ marginBottom: '16px' }} />
-            <Skeleton width="40%" height="36px" />
+          <Card key={i} style={{ padding: '20px' }}>
+            <Skeleton width="55%" height="11px" style={{ marginBottom: '14px' }} />
+            <Skeleton width="35%" height="32px" />
+          </Card>
+        ))}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+        {[1,2].map(i => (
+          <Card key={i} style={{ padding: '24px' }}>
+            <Skeleton width="40%" height="14px" style={{ marginBottom: '20px' }} />
+            <Skeleton width="100%" height="180px" />
           </Card>
         ))}
       </div>
@@ -86,20 +84,25 @@ export default function Analytics() {
   )
 
   if (!data) return (
-    <EmptyState icon="📊" title="No data yet" subtitle="Process some meetings to see analytics." />
+    <div style={{ maxWidth: '1000px', margin: '0 auto' }}>
+      <EmptyState icon="📊" title="No data yet" subtitle="Process some meetings to see analytics." />
+    </div>
   )
 
   return (
-    <div style={{ animation: 'fadeIn 0.3s ease', textAlign: 'center', padding: '40px 20px'}}>
+    <div style={{ maxWidth: '1000px', margin: '0 auto' }}>
+
       <PageHeader
         title="Analytics"
         subtitle="Trends and insights across all your meetings."
       />
 
-      {/* ── Stats ── */}
+      {/* ── Stats row ── */}
       <div style={{
-        display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)',
-        gap: '16px', marginBottom: '32px',
+        display: 'grid',
+        gridTemplateColumns: 'repeat(4, 1fr)',
+        gap: '14px',
+        marginBottom: '28px',
       }}>
         <StatCard label="Total Meetings"  value={data.total}     icon="🎙️" color={T.blueText}   bg={T.blueBg}   delay={0}    />
         <StatCard label="Decisions Found" value={data.decisions} icon="⚡"  color={T.purpleText} bg={T.purpleBg} delay={0.06} />
@@ -107,68 +110,68 @@ export default function Analytics() {
         <StatCard label="Topics Detected" value={data.topics}    icon="🏷️" color={T.cyanText}   bg={T.cyanBg}   delay={0.18} />
       </div>
 
-      {/* ── Charts ── */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+      {/* ── Charts row ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
 
-        {/* Meetings per day */}
-        <div className="anim-fade-up anim-fade-up-3">
-          <Card>
+        {/* Meetings over time */}
+        <Card style={{ padding: '24px' }}>
+          <div style={{
+            fontSize: '14px', fontWeight: 700,
+            color: T.text, letterSpacing: '-0.02em',
+            marginBottom: '20px',
+          }}>
+            Meetings Over Time
+          </div>
+          {data.weeklyData.length === 0 ? (
             <div style={{
-              fontSize: '16px', fontWeight: 700,
-              letterSpacing: '-0.03em', color: T.text,
-              marginBottom: '24px',
+              height: '180px', display: 'flex',
+              alignItems: 'center', justifyContent: 'center',
+              fontSize: '13px', color: T.text3,
             }}>
-              Meetings Over Time
+              Not enough data yet.
             </div>
-            {data.weeklyData.length === 0 ? (
-              <div style={{ fontSize: '14px', color: T.text3, padding: '32px 0', textAlign: 'center' }}>
-                Not enough data yet.
-              </div>
-            ) : (
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={data.weeklyData} barSize={28}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={T.border} vertical={false} />
-                  <XAxis
-                    dataKey="date"
-                    tick={{ fontSize: 12, fill: T.text3, fontFamily: 'var(--font)' }}
-                    axisLine={false} tickLine={false}
-                  />
-                  <YAxis
-                    tick={{ fontSize: 12, fill: T.text3, fontFamily: 'var(--font)' }}
-                    axisLine={false} tickLine={false}
-                    allowDecimals={false}
-                  />
-                  <Tooltip
-                    contentStyle={tooltipStyle}
-                    cursor={{ fill: T.accentBg }}
-                  />
-                  <Bar dataKey="meetings" fill={T.accent} radius={[6, 6, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </Card>
-        </div>
+          ) : (
+            <ResponsiveContainer width="100%" height={180}>
+              <BarChart data={data.weeklyData} barSize={24}>
+                <CartesianGrid strokeDasharray="3 3" stroke={T.border} vertical={false} />
+                <XAxis
+                  dataKey="date"
+                  tick={{ fontSize: 11, fill: T.text3, fontFamily: 'var(--font)' }}
+                  axisLine={false} tickLine={false}
+                />
+                <YAxis
+                  tick={{ fontSize: 11, fill: T.text3, fontFamily: 'var(--font)' }}
+                  axisLine={false} tickLine={false}
+                  allowDecimals={false}
+                />
+                <Tooltip contentStyle={tooltipStyle} cursor={{ fill: T.accentBg }} />
+                <Bar dataKey="meetings" fill={T.accent} radius={[5, 5, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </Card>
 
         {/* Intelligence breakdown */}
-        <div className="anim-fade-up anim-fade-up-4">
-          <Card>
-            <div style={{
-              fontSize: '16px', fontWeight: 700,
-              letterSpacing: '-0.03em', color: T.text,
-              marginBottom: '24px',
-            }}>
-              Intelligence Breakdown
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              {[
-                { label: 'Decisions',    value: data.decisions, total: Math.max(data.decisions, 1), color: T.purple },
-                { label: 'Action Items', value: data.actions,   total: Math.max(data.actions, 1),   color: T.orange },
-                { label: 'Topics',       value: data.topics,    total: Math.max(data.topics, 1),    color: T.cyan   },
-              ].map(item => (
+        <Card style={{ padding: '24px' }}>
+          <div style={{
+            fontSize: '14px', fontWeight: 700,
+            color: T.text, letterSpacing: '-0.02em',
+            marginBottom: '20px',
+          }}>
+            Intelligence Breakdown
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '18px', marginTop: '8px' }}>
+            {[
+              { label: 'Decisions',    value: data.decisions, color: T.purple },
+              { label: 'Action Items', value: data.actions,   color: T.orange },
+              { label: 'Topics',       value: data.topics,    color: T.cyan   },
+            ].map(item => {
+              const max = Math.max(data.decisions, data.actions, data.topics, 1)
+              return (
                 <div key={item.label}>
                   <div style={{
                     display: 'flex', justifyContent: 'space-between',
-                    marginBottom: '7px',
+                    alignItems: 'center', marginBottom: '8px',
                   }}>
                     <span style={{ fontSize: '13px', fontWeight: 600, color: T.text2 }}>
                       {item.label}
@@ -178,22 +181,44 @@ export default function Analytics() {
                     </span>
                   </div>
                   <div style={{
-                    height: '8px', borderRadius: '99px',
+                    height: '7px', borderRadius: '99px',
                     background: T.surface2, overflow: 'hidden',
                   }}>
                     <div style={{
                       height: '100%',
-                      width: `${Math.min(100, (item.value / Math.max(data.decisions, data.actions, data.topics, 1)) * 100)}%`,
+                      width: `${Math.min(100, (item.value / max) * 100)}%`,
                       background: item.color,
                       borderRadius: '99px',
                       transition: 'width 0.8s ease',
                     }} />
                   </div>
                 </div>
-              ))}
-            </div>
-          </Card>
-        </div>
+              )
+            })}
+          </div>
+
+          {/* Summary totals at bottom */}
+          <div style={{
+            marginTop: '28px',
+            paddingTop: '18px',
+            borderTop: `1px solid ${T.border}`,
+            display: 'flex', justifyContent: 'space-between',
+          }}>
+            {[
+              { label: 'Per Meeting (avg)', value: data.total ? ((data.decisions + data.actions + data.topics) / data.total).toFixed(1) : '0' },
+              { label: 'Total Insights',    value: data.decisions + data.actions + data.topics },
+            ].map(s => (
+              <div key={s.label} style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: '20px', fontWeight: 800, color: T.text, letterSpacing: '-0.03em' }}>
+                  {s.value}
+                </div>
+                <div style={{ fontSize: '11px', fontWeight: 600, color: T.text3, marginTop: '3px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                  {s.label}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
 
       </div>
     </div>

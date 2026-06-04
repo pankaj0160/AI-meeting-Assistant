@@ -19,23 +19,49 @@ import {
 /* ── Greeting ── */
 function getGreeting(userName = 'there') {
   const hour = new Date().getHours()
-  if (hour < 12) return {
+  const name = userName.split(' ')[0] // first name only
+
+  if (hour >= 5 && hour < 12) return {
     eyebrow: 'Good Morning',
     emoji: '☀️',
-    title: `Welcome back, ${userName}`,
-    subtitle: 'Turn today\'s conversations into decisions, actions, and outcomes.',
+    title: `Rise and align, ${name}.`,
+    subtitle: 'Your meetings from yesterday are summarized and waiting. Start sharp.',
   }
-  if (hour < 17) return {
+
+  if (hour >= 12 && hour < 14) return {
     eyebrow: 'Good Afternoon',
-    emoji: '🚀',
-    title: `Ready to stay aligned, ${userName}?`,
-    subtitle: 'Your AI meeting assistant is standing by to surface insights instantly.',
+    emoji: '⚡',
+    title: `Peak hours, ${name}.`,
+    subtitle: 'Best time to make decisions. Your action items and decisions are ready to review.',
   }
-  return {
+
+  if (hour >= 14 && hour < 17) return {
+    eyebrow: 'Mid-Afternoon',
+    emoji: '🎯',
+    title: `Stay on target, ${name}.`,
+    subtitle: 'Three hours left in the workday. Here\'s everything your meetings surfaced.',
+  }
+
+  if (hour >= 17 && hour < 20) return {
     eyebrow: 'Good Evening',
+    emoji: '🌆',
+    title: `Wind down with clarity, ${name}.`,
+    subtitle: 'Close the loop on today — action items, decisions, and follow-ups are all here.',
+  }
+
+  if (hour >= 20 && hour < 24) return {
+    eyebrow: 'Late Night',
     emoji: '🌙',
-    title: `Let's wrap up well, ${userName}`,
-    subtitle: 'Review summaries, confirm action items, and close the loop before tomorrow.',
+    title: `Still at it, ${name}?`,
+    subtitle: 'Summly\'s got you covered. Everything from today is organized and waiting.',
+  }
+
+  // midnight – 5am
+  return {
+    eyebrow: 'Burning Midnight Oil',
+    emoji: '🔥',
+    title: `The grind is real, ${name}.`,
+    subtitle: 'Whatever brought you here this late — your meeting intelligence is ready.',
   }
 }
 

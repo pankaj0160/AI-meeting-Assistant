@@ -649,6 +649,7 @@ def reindex_all(current_user: User = Depends(get_current_user)):
                     filename=m["filename"],
                     transcript=m["transcript"],
                     created_at=m["created_at"],
+                    user_id=m.get("user_id"),       # ← ONLY CHANGE
                 )
                 indexed += 1
             except Exception as e:
@@ -657,7 +658,6 @@ def reindex_all(current_user: User = Depends(get_current_user)):
     except Exception as e:
         logger.error(f"Reindex failed: {e}")
         raise HTTPException(status_code=500, detail="Reindex failed")
-    
 
 # =====================================================
 # WEBSOCKET PROGRESS ENDPOINT
@@ -1060,6 +1060,10 @@ def update_task_status(
 # =====================================================
 # PHASE 7 — PDF EXPORT + FOLLOW-UP EMAIL
 # =====================================================
+# =====================================================
+# PHASE 7 — PDF EXPORT + FOLLOW-UP EMAIL
+# =====================================================
+
 @app.get("/meetings/{meeting_id}/export/pdf", tags=["Export"])
 def export_pdf(
     meeting_id:   int,
@@ -1077,36 +1081,36 @@ def export_pdf(
         HRFlowable, Table, TableStyle,
     )
     from reportlab.lib.enums      import TA_LEFT, TA_CENTER
- 
+
     # -- Fetch data -------------------------------------------------------------
     meeting = get_meeting_by_id(meeting_id, user_id=current_user.id)
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
- 
+
     intel    = get_meeting_intelligence(meeting_id)
     health   = get_meeting_health(meeting_id)
     quotes   = get_meeting_quotes(meeting_id)
     ai_title = get_meeting_title(meeting_id)
- 
+
     title = ai_title or meeting.get("filename", "Meeting Report")
- 
+
     # -- Build PDF -------------------------------------------------------------
     buffer = io.BytesIO()
- 
+
     doc = SimpleDocTemplate(
         buffer,
         pagesize=A4,
         rightMargin=2*cm, leftMargin=2*cm,
         topMargin=2*cm,   bottomMargin=2*cm,
     )
- 
+
     styles = getSampleStyleSheet()
     W = A4[0] - 4*cm  # usable width
- 
+
     # -- Custom styles ---------------------------------------------------------
     def style(name, **kw):
         return ParagraphStyle(name, parent=styles['Normal'], **kw)
- 
+
     S_title   = style('T',  fontSize=22, fontName='Helvetica-Bold',
                       textColor=colors.HexColor('#0e1117'), spaceAfter=4,
                       alignment=TA_LEFT)
@@ -1125,29 +1129,29 @@ def export_pdf(
                       leftIndent=14, fontName='Helvetica-Oblique', spaceAfter=4)
     S_label   = style('L',  fontSize=9,  fontName='Helvetica-Bold',
                       textColor=colors.HexColor('#9aa3bc'), spaceAfter=2)
- 
+
     gray = colors.HexColor('#e2e8f0')
- 
+
     def hr():
         return HRFlowable(
             width='100%', thickness=1,
             color=gray, spaceAfter=10, spaceBefore=10,
         )
- 
+
     def section(text):
         return Paragraph(text, S_section)
- 
+
     def body(text):
         return Paragraph(text, S_body)
- 
+
     def bullet(text):
         return Paragraph(f"- {text}", S_bullet)
- 
+
     def label(text):
         return Paragraph(text, S_label)
- 
+
     story = []
- 
+
     # -- Cover -----------------------------------------------------------------
     story.append(Table(
         [[Paragraph(title, S_title)]],
@@ -1162,14 +1166,14 @@ def export_pdf(
         ]),
     ))
     story.append(Spacer(1, 10))
- 
+
     story.append(Paragraph(
         f"{meeting.get('created_at', '')[:10]}   |   "
         f"{meeting.get('filename', '')}   |   "
         f"AI Generated Report",
         S_meta,
     ))
- 
+
     if health:
         score = health.get("overall_score", 0)
         score_color = (
@@ -1182,23 +1186,23 @@ def export_pdf(
             f"<font color='{score_color}'><b>{score}/100</b></font>",
             S_meta,
         ))
- 
+
     story.append(Spacer(1, 6))
     story.append(hr())
- 
+
     # -- Summary ---------------------------------------------------------------
     if intel and intel.get("summary"):
         story.append(section("Executive Summary"))
         story.append(body(intel["summary"]))
         story.append(hr())
- 
+
     # -- Topics ----------------------------------------------------------------
     if intel and intel.get("topics"):
         story.append(section("Topics Discussed"))
         topics_str = "   |   ".join([t["title"] for t in intel["topics"]])
         story.append(body(topics_str))
         story.append(hr())
- 
+
     # -- Decisions -------------------------------------------------------------
     if intel and intel.get("decisions"):
         story.append(section("Decisions Made"))
@@ -1207,11 +1211,11 @@ def export_pdf(
             if d.get("rationale"):
                 story.append(Paragraph(f"  {d['rationale']}", S_label))
         story.append(hr())
- 
+
     # -- Action Items ----------------------------------------------------------
     if intel and intel.get("action_items"):
         story.append(section("Action Items"))
- 
+
         data = [["Task", "Owner", "Deadline", "Priority"]]
         for item in intel["action_items"]:
             data.append([
@@ -1220,7 +1224,7 @@ def export_pdf(
                 item.get("deadline", "-") or "-",
                 (item.get("priority") or "medium").title(),
             ])
- 
+
         col_w = [W*0.45, W*0.2, W*0.2, W*0.15]
         t = Table(data, colWidths=col_w)
         t.setStyle(TableStyle([
@@ -1240,7 +1244,7 @@ def export_pdf(
         ]))
         story.append(t)
         story.append(hr())
- 
+
     # -- Key Quotes ------------------------------------------------------------
     if quotes:
         story.append(section("Key Quotes"))
@@ -1254,7 +1258,7 @@ def export_pdf(
                 ))
             story.append(Spacer(1, 4))
         story.append(hr())
- 
+
     # -- Health Detail ---------------------------------------------------------
     if health:
         story.append(section("Meeting Health Analysis"))
@@ -1282,7 +1286,7 @@ def export_pdf(
             ('RIGHTPADDING',   (0,0),  (-1,-1), 8),
         ]))
         story.append(ht)
- 
+
         if health.get("highlights"):
             story.append(Spacer(1, 8))
             story.append(label("Highlights"))
@@ -1291,9 +1295,9 @@ def export_pdf(
             story.append(Spacer(1, 4))
             story.append(label("To Improve"))
             story.append(body(health["concerns"]))
- 
+
         story.append(hr())
- 
+
     # -- Transcript ------------------------------------------------------------
     transcript = meeting.get("transcript", "")
     if transcript:
@@ -1302,7 +1306,7 @@ def export_pdf(
             para = para.strip()
             if para:
                 story.append(body(para))
- 
+
     # -- Footer ----------------------------------------------------------------
     story.append(Spacer(1, 16))
     story.append(hr())
@@ -1310,13 +1314,13 @@ def export_pdf(
         "Generated by Summly  |  AI Meeting Intelligence Platform  |  summly.ai",
         S_meta,
     ))
- 
+
     # -- Build -----------------------------------------------------------------
     doc.build(story)
     buffer.seek(0)
- 
+
     safe_name = (title or "meeting").replace(" ", "_")[:40]
- 
+
     return StreamingResponse(
         buffer,
         media_type="application/pdf",
@@ -1324,7 +1328,6 @@ def export_pdf(
             "Content-Disposition": f'attachment; filename="{safe_name}_report.pdf"'
         },
     )
-
 
 @app.get("/meetings/{meeting_id}/followup-email", tags=["Export"])
 def get_followup_email(
