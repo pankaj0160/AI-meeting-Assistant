@@ -1,8 +1,5 @@
 # 🚀 Summly – AI-Powered Meeting Intelligence Platform
 
-<p align="center">
-  <img src="assets/logo.png" alt="Summly Logo" width="180"/>
-</p>
 
 <p align="center">
   <b>Transform Meeting Recordings into Actionable Insights using AI</b>
