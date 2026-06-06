@@ -8,7 +8,20 @@ from server.core.rag.hybrid_search import hybrid_search
 
 load_dotenv()
 
-_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+_client = None
+
+
+def get_groq_client():
+    global _client
+
+    if _client is None:
+        _client = Groq(
+            api_key=os.getenv("GROQ_API_KEY")
+        )
+
+    return _client
+
+
 MODEL = "llama-3.3-70b-versatile"
 
 
@@ -68,6 +81,7 @@ Rules:
 QUESTION:
 {query}"""
 
+    client = get_groq_client()
     response = _client.chat.completions.create(
         model=MODEL,
         messages=[

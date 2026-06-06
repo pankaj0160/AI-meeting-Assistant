@@ -6,12 +6,25 @@ from pathlib import Path
 from server.core.rag.embedder import chunk_transcript, embed_texts
 
 _CHROMA_PATH = Path("chroma_db")
-_client = chromadb.PersistentClient(path=str(_CHROMA_PATH))
 
-_collection = _client.get_or_create_collection(
-    name="meetings",
-    metadata={"hnsw:space": "cosine"},
-)
+_client = None
+_collection = None
+
+
+def get_collection():
+    global _client, _collection
+
+    if _collection is None:
+        _client = chromadb.PersistentClient(
+            path=str(_CHROMA_PATH)
+        )
+
+        _collection = _client.get_or_create_collection(
+            name="meetings",
+            metadata={"hnsw:space": "cosine"},
+        )
+
+    return _collection
 
 
 def get_collection():

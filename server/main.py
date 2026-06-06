@@ -3,7 +3,6 @@ Summly FastAPI Backend
 Phase 2 Complete with Meeting Intelligence Engine
 """
 
-from server.core.transcription.audio_cleaner import AudioCleaner
 import datetime
 from server.core.auth.dependencies import get_current_user, get_optional_user
 from server.core.auth.models import User
@@ -21,9 +20,14 @@ import shutil
 import time
 import logging
 
-from server.core.transcription.audio_extractor import extract_audio
-from server.core.transcription.transcribe import transcribe_audio
-from server.core.transcription.youtube_downloader import download_youtube
+# ── Lazy-loaded at first use (heavy AI / ML deps) ──────────────────────────
+# from server.core.transcription.audio_extractor import extract_audio       # FFmpeg-heavy
+# from server.core.transcription.transcribe import transcribe_audio          # Whisper
+# from server.core.transcription.youtube_downloader import download_youtube  # yt-dlp
+# from server.core.intelligence.workflow import analyze_transcript            # LLM
+# from server.core.rag.indexer import index_meeting                          # ChromaDB
+# from server.core.rag.chat import chat_with_meeting, chat_across_meetings   # SentenceTransformer
+# ───────────────────────────────────────────────────────────────────────────
 
 from server.core.database import (
     init_db,
@@ -33,11 +37,6 @@ from server.core.database import (
     get_meeting_intelligence,
     get_meeting_by_id,
 )
-
-from server.core.intelligence.workflow import analyze_transcript
-from server.core.rag.indexer import index_meeting
-from server.core.rag.chat import chat_with_meeting, chat_across_meetings
-
 
 from server.core.intelligence.health  import analyze_meeting_health
 from server.core.intelligence.quotes  import extract_key_quotes
@@ -57,7 +56,6 @@ from server.core.database import (
     get_meeting_title,
     update_action_item_status,
 )
-
 
 from server.core.intelligence.followup import generate_followup_email
 from server.core.database import get_meeting_title
@@ -88,9 +86,7 @@ app = FastAPI(
 @app.middleware("http")
 async def request_logger(request, call_next):
     print(f"REQUEST >>> {request.method} {request.url.path}")
-
     response = await call_next(request)
-
     print(f"RESPONSE <<< {response.status_code}")
     return response
 
@@ -210,14 +206,10 @@ def serialize_intelligence(intel_obj) -> dict:
     """
     if intel_obj is None:
         return None
-    
-    # Pydantic v2
     if hasattr(intel_obj, 'model_dump'):
         return intel_obj.model_dump()
-    # Pydantic v1
     elif hasattr(intel_obj, 'dict'):
         return intel_obj.dict()
-    # Already a dict
     else:
         return intel_obj
 
@@ -227,7 +219,6 @@ def get_intelligence_for_response(meeting_id: int):
     try:
         intel = get_meeting_intelligence(meeting_id)
         if intel:
-            # DB returns a dict, serialize properly
             return IntelligenceResponse(
                 summary=intel.get("summary", ""),
                 action_items=intel.get("action_items", []),
@@ -274,12 +265,11 @@ async def upload_file(
     Upload and process an audio or video file.
     Returns transcript + AI intelligence.
     """
-    
+
     start_time = time.time()
-    
+
     ext = file.filename.split(".")[-1].lower()
-    
-    # Determine upload location
+
     if ext in VIDEO_EXTENSIONS:
         file_path = VIDEO_DIR / file.filename
     elif ext in AUDIO_EXTENSIONS:
@@ -290,8 +280,7 @@ async def upload_file(
             status_code=400,
             detail=f"Unsupported file type: {ext}. Supported: {VIDEO_EXTENSIONS | AUDIO_EXTENSIONS}"
         )
-    
-    # Save uploaded file
+
     try:
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
@@ -299,26 +288,26 @@ async def upload_file(
     except Exception as e:
         logger.error(f"File save failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to save file")
-    
-    # Validate file size
+
     file_size = file_path.stat().st_size
     if file_size > MAX_FILE_SIZE:
         file_path.unlink(missing_ok=True)
         logger.error(f"File exceeds size limit: {file_size / 1024 / 1024:.2f} MB")
         raise HTTPException(status_code=400, detail="File size exceeds 500 MB limit")
-    
+
     file_size_mb = round(file_size / (1024 * 1024), 2)
     logger.info(f"Processing file: {file.filename} ({file_size_mb} MB)")
-    
+
     try:
-    # Convert video to wav if needed
+        # Lazy import — FFmpeg-heavy
+        from server.core.transcription.audio_extractor import extract_audio
+
         if ext in VIDEO_EXTENSIONS:
             logger.info("Extracting audio from video...")
             wav_file = extract_audio(str(file_path), enable_cleaning=enable_audio_cleaning)
         else:
             wav_file = str(file_path)
-            
-            # Also clean audio files if they're direct uploads
+
             if enable_audio_cleaning:
                 try:
                     logger.info("Cleaning uploaded audio file...")
@@ -334,31 +323,32 @@ async def upload_file(
                     logger.info(f"✓ Audio cleaned - SNR improvement: {result['snr_improvement_db']:+.1f}dB")
                 except Exception as e:
                     logger.warning(f"Audio cleaning failed (non-fatal): {e}")
-        
-        # Transcribe
+
+        # Lazy import — loads Whisper model
         logger.info("Transcribing audio...")
+        from server.core.transcription.transcribe import transcribe_audio
         transcript = transcribe_audio(wav_file)
         logger.info(f"Transcription complete: {len(transcript)} characters")
-        
-        # Save to database
+
         logger.info("Saving to database...")
         meeting_id = save_transcript_and_get_id(
             filename=file.filename,
             transcript=transcript,
             user_id=current_user.id,
         )
-        
-        # Generate intelligence
+
+        # Lazy import — LLM call
         logger.info(f"Generating intelligence for meeting {meeting_id}...")
+        from server.core.intelligence.workflow import analyze_transcript
         intelligence = analyze_transcript(transcript)
-        
-# Save intelligence
+
         save_meeting_intelligence(meeting_id, intelligence)
         logger.info(f"Intelligence saved: {len(intelligence.action_items)} items, "
                     f"{len(intelligence.decisions)} decisions, {len(intelligence.topics)} topics")
 
-        # Index into ChromaDB for RAG
+        # Lazy import — loads ChromaDB
         try:
+            from server.core.rag.indexer import index_meeting
             index_meeting(
                 meeting_id=meeting_id,
                 filename=file.filename,
@@ -369,14 +359,13 @@ async def upload_file(
         except Exception as e:
             logger.warning(f"ChromaDB indexing failed (non-fatal): {e}")
 
-        # Save transcript to file
         transcript_file = TRANSCRIPT_DIR / f"{Path(file.filename).stem}.txt"
         with open(transcript_file, "w", encoding="utf-8") as f:
             f.write(transcript)
-        
+
         processing_time = round(time.time() - start_time, 2)
         logger.info(f"Processing complete in {processing_time}s")
-        
+
         return TranscriptResponse(
             meeting_id=meeting_id,
             filename=file.filename,
@@ -386,7 +375,7 @@ async def upload_file(
             processing_time=processing_time,
             file_size_mb=file_size_mb
         )
-    
+
     except Exception as e:
         logger.error(f"Processing failed: {e}", exc_info=True)
         file_path.unlink(missing_ok=True)
@@ -406,48 +395,51 @@ async def process_youtube(
     Download, transcribe, and analyze YouTube video.
     Returns transcript + AI intelligence.
     """
-    
+
     start_time = time.time()
-    
+
     try:
         logger.info(f"Processing YouTube URL: {request.url}")
-        
-        # Download audio
+
+        # Lazy import — yt-dlp
         logger.info("Downloading audio from YouTube...")
+        from server.core.transcription.youtube_downloader import download_youtube
         youtube_data = download_youtube(str(request.url))
-        
+
         mp3_file = youtube_data["audio_file"]
         title = youtube_data["title"]
         logger.info(f"Downloaded: {title}")
-        
-        # Convert mp3 to wav
+
+        # Lazy import — FFmpeg-heavy
         logger.info("Converting audio format...")
-        wav_file = extract_audio(mp3_file, enable_cleaning=request.enable_audio_cleaning)
-        
-        # Transcribe
+        from server.core.transcription.audio_extractor import extract_audio
+        wav_file = extract_audio(mp3_file, enable_cleaning=enable_audio_cleaning)
+
+        # Lazy import — loads Whisper model
         logger.info("Transcribing audio...")
+        from server.core.transcription.transcribe import transcribe_audio
         transcript = transcribe_audio(wav_file)
         logger.info(f"Transcription complete: {len(transcript)} characters")
-        
-        # Save to database
+
         logger.info("Saving to database...")
         meeting_id = save_transcript_and_get_id(
             filename=title,
             transcript=transcript,
             user_id=current_user.id,
         )
-        
-        # Generate intelligence
+
+        # Lazy import — LLM call
         logger.info(f"Generating intelligence for meeting {meeting_id}...")
+        from server.core.intelligence.workflow import analyze_transcript
         intelligence = analyze_transcript(transcript)
-        
-# Save intelligence
+
         save_meeting_intelligence(meeting_id, intelligence)
         logger.info(f"Intelligence saved: {len(intelligence.action_items)} items, "
                     f"{len(intelligence.decisions)} decisions, {len(intelligence.topics)} topics")
 
-        # Index into ChromaDB for RAG
+        # Lazy import — loads ChromaDB
         try:
+            from server.core.rag.indexer import index_meeting
             index_meeting(
                 meeting_id=meeting_id,
                 filename=title,
@@ -458,14 +450,13 @@ async def process_youtube(
         except Exception as e:
             logger.warning(f"ChromaDB indexing failed (non-fatal): {e}")
 
-        # Save transcript
         transcript_file = TRANSCRIPT_DIR / f"{title}.txt"
         with open(transcript_file, "w", encoding="utf-8") as f:
             f.write(transcript)
-        
+
         processing_time = round(time.time() - start_time, 2)
         logger.info(f"Processing complete in {processing_time}s")
-        
+
         return YouTubeResponse(
             meeting_id=meeting_id,
             title=title,
@@ -474,7 +465,7 @@ async def process_youtube(
             intelligence=get_intelligence_for_response(meeting_id),
             processing_time=processing_time
         )
-    
+
     except Exception as e:
         logger.error(f"YouTube processing failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
@@ -509,12 +500,12 @@ def get_meeting(
     """Get full details of a specific meeting."""
     try:
         meeting = get_meeting_by_id(meeting_id, user_id=current_user.id)
-        
+
         if not meeting:
             raise HTTPException(status_code=404, detail="Meeting not found")
-        
+
         intelligence = get_intelligence_for_response(meeting_id)
-        
+
         return MeetingDetail(
             id=meeting["id"],
             filename=meeting["filename"],
@@ -536,18 +527,17 @@ def meeting_intelligence(
 ):
     """Get intelligence report for a specific meeting."""
     try:
-        # Verify ownership
         meeting = get_meeting_by_id(meeting_id, user_id=current_user.id)
         if not meeting:
             raise HTTPException(status_code=404, detail="Meeting not found")
         intelligence = get_meeting_intelligence(meeting_id)
-        
+
         if intelligence is None:
             raise HTTPException(
                 status_code=404,
                 detail="No intelligence found for this meeting"
             )
-        
+
         return IntelligenceResponse(
             summary=intelligence.get("summary", ""),
             action_items=intelligence.get("action_items", []),
@@ -560,7 +550,7 @@ def meeting_intelligence(
     except Exception as e:
         logger.error(f"Failed to fetch intelligence for meeting {meeting_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch intelligence")
-    
+
 
 # =====================================================
 # CHAT ENDPOINTS
@@ -582,11 +572,12 @@ def chat_meeting(
         )
 
     try:
-        # Verify meeting belongs to user
         meeting = get_meeting_by_id(request.meeting_id, user_id=current_user.id)
         if not meeting:
             raise HTTPException(status_code=404, detail="Meeting not found")
 
+        # Lazy import — loads SentenceTransformer + ChromaDB
+        from server.core.rag.chat import chat_with_meeting
         result = chat_with_meeting(
             query=request.query,
             meeting_id=request.meeting_id,
@@ -611,6 +602,8 @@ def chat_search(
     Answer a question by searching across ALL meetings.
     """
     try:
+        # Lazy import — loads SentenceTransformer + ChromaDB
+        from server.core.rag.chat import chat_across_meetings
         result = chat_across_meetings(query=request.query)
         return {
             "answer":  result["answer"],
@@ -620,12 +613,11 @@ def chat_search(
     except Exception as e:
         logger.error(f"Cross-meeting chat failed: {e}")
         raise HTTPException(status_code=500, detail=f"Chat failed: {str(e)}")
-    
+
 
 # =====================================================
 # STATS ENDPOINT
 # =====================================================
-
 
 @app.get("/stats", tags=["System"])
 def get_stats(current_user: User = Depends(get_current_user)):
@@ -668,6 +660,7 @@ def get_stats(current_user: User = Depends(get_current_user)):
 def reindex_all(current_user: User = Depends(get_current_user)):
     try:
         from server.core.database import get_all_meetings_for_indexing
+        # Lazy import — loads ChromaDB
         from server.core.rag.indexer import index_meeting
         meetings = get_all_meetings_for_indexing(user_id=current_user.id)
         indexed = 0
@@ -678,7 +671,7 @@ def reindex_all(current_user: User = Depends(get_current_user)):
                     filename=m["filename"],
                     transcript=m["transcript"],
                     created_at=m["created_at"],
-                    user_id=m.get("user_id"),       # ← ONLY CHANGE
+                    user_id=m.get("user_id"),
                 )
                 indexed += 1
             except Exception as e:
@@ -726,7 +719,6 @@ progress = ProgressManager()
 async def websocket_progress(websocket: WebSocket, job_id: str):
     await progress.connect(job_id, websocket)
     try:
-        # Keep connection alive until client disconnects
         while True:
             await asyncio.sleep(30)
     except WebSocketDisconnect:
@@ -766,6 +758,8 @@ async def _run_with_progress(job_id: str, filename: str, transcript_fn, user_id:
         )
 
         await step("intel",      "Generating meeting intelligence...", 60)
+        # Lazy import — LLM call
+        from server.core.intelligence.workflow import analyze_transcript
         intelligence = await asyncio.to_thread(analyze_transcript, transcript)
 
         await step("intel",      "Saving intelligence...",        75)
@@ -773,6 +767,8 @@ async def _run_with_progress(job_id: str, filename: str, transcript_fn, user_id:
 
         await step("index",      "Indexing for RAG search...",    88)
         try:
+            # Lazy import — loads ChromaDB
+            from server.core.rag.indexer import index_meeting
             await asyncio.to_thread(
                 index_meeting, meeting_id, filename, transcript, ""
             )
@@ -823,6 +819,9 @@ async def upload_file_with_progress(
     file_size_mb = round(file_path.stat().st_size / (1024 * 1024), 2)
 
     def do_transcribe():
+        # Lazy imports — FFmpeg + Whisper
+        from server.core.transcription.audio_extractor import extract_audio
+        from server.core.transcription.transcribe import transcribe_audio
         if ext in VIDEO_EXTENSIONS:
             wav = extract_audio(str(file_path), enable_cleaning=enable_audio_cleaning)
         else:
@@ -866,11 +865,14 @@ async def youtube_with_progress(
     start_time = time.time()
 
     def do_transcribe():
+        # Lazy imports — yt-dlp + FFmpeg + Whisper
+        from server.core.transcription.youtube_downloader import download_youtube
+        from server.core.transcription.audio_extractor import extract_audio
+        from server.core.transcription.transcribe import transcribe_audio
         yt_data = download_youtube(str(url))
         wav     = extract_audio(yt_data["audio_file"], enable_cleaning=enable_audio_cleaning)
         return transcribe_audio(wav), yt_data["title"]
 
-    # Run download+transcribe in thread
     await progress.send(job_id, {
         "step": "download", "message": "Downloading YouTube audio...", "pct": 8
     })
@@ -893,6 +895,8 @@ async def youtube_with_progress(
     await progress.send(job_id, {
         "step": "intel", "message": "Generating intelligence...", "pct": 60
     })
+    # Lazy import — LLM call
+    from server.core.intelligence.workflow import analyze_transcript
     intelligence = await asyncio.to_thread(analyze_transcript, transcript)
     await asyncio.to_thread(save_meeting_intelligence, meeting_id, intelligence)
 
@@ -900,6 +904,8 @@ async def youtube_with_progress(
         "step": "index", "message": "Indexing for RAG...", "pct": 88
     })
     try:
+        # Lazy import — loads ChromaDB
+        from server.core.rag.indexer import index_meeting
         await asyncio.to_thread(index_meeting, meeting_id, title, transcript, "")
     except Exception as e:
         logger.warning(f"Index failed: {e}")
@@ -943,7 +949,6 @@ async def contact(request: ContactRequest):
             "sent_at": datetime.datetime.now().isoformat(),
         }
 
-        # Save to contact_submissions.json
         path = Path("contact_submissions.json")
         submissions = []
         if path.exists():
@@ -964,9 +969,6 @@ async def contact(request: ContactRequest):
         raise HTTPException(status_code=500, detail="Failed to send message")
 
 
-
-
-
 # =====================================================
 # PHASE 6 — ADVANCED INTELLIGENCE ENDPOINTS
 # =====================================================
@@ -984,12 +986,10 @@ def get_health_score(
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
 
-    # Return cached if exists
     cached = get_meeting_health(meeting_id)
     if cached:
         return cached
 
-    # Generate fresh
     intel = get_meeting_intelligence(meeting_id)
     if not intel:
         raise HTTPException(
@@ -1017,12 +1017,10 @@ def get_quotes(
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
 
-    # Return cached
     cached = get_meeting_quotes(meeting_id)
     if cached:
         return {"quotes": cached}
 
-    # Generate fresh
     quotes = extract_key_quotes(meeting["transcript"])
     save_meeting_quotes(meeting_id, quotes)
     return {"quotes": quotes}
@@ -1084,13 +1082,6 @@ def update_task_status(
     return {"message": "Status updated", "status": status}
 
 
-
-
-
-
-# =====================================================
-# PHASE 7 — PDF EXPORT + FOLLOW-UP EMAIL
-# =====================================================
 # =====================================================
 # PHASE 7 — PDF EXPORT + FOLLOW-UP EMAIL
 # =====================================================
@@ -1113,7 +1104,6 @@ def export_pdf(
     )
     from reportlab.lib.enums      import TA_LEFT, TA_CENTER
 
-    # -- Fetch data -------------------------------------------------------------
     meeting = get_meeting_by_id(meeting_id, user_id=current_user.id)
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
@@ -1125,7 +1115,6 @@ def export_pdf(
 
     title = ai_title or meeting.get("filename", "Meeting Report")
 
-    # -- Build PDF -------------------------------------------------------------
     buffer = io.BytesIO()
 
     doc = SimpleDocTemplate(
@@ -1136,9 +1125,8 @@ def export_pdf(
     )
 
     styles = getSampleStyleSheet()
-    W = A4[0] - 4*cm  # usable width
+    W = A4[0] - 4*cm
 
-    # -- Custom styles ---------------------------------------------------------
     def style(name, **kw):
         return ParagraphStyle(name, parent=styles['Normal'], **kw)
 
@@ -1183,7 +1171,6 @@ def export_pdf(
 
     story = []
 
-    # -- Cover -----------------------------------------------------------------
     story.append(Table(
         [[Paragraph(title, S_title)]],
         colWidths=[W],
@@ -1221,20 +1208,17 @@ def export_pdf(
     story.append(Spacer(1, 6))
     story.append(hr())
 
-    # -- Summary ---------------------------------------------------------------
     if intel and intel.get("summary"):
         story.append(section("Executive Summary"))
         story.append(body(intel["summary"]))
         story.append(hr())
 
-    # -- Topics ----------------------------------------------------------------
     if intel and intel.get("topics"):
         story.append(section("Topics Discussed"))
         topics_str = "   |   ".join([t["title"] for t in intel["topics"]])
         story.append(body(topics_str))
         story.append(hr())
 
-    # -- Decisions -------------------------------------------------------------
     if intel and intel.get("decisions"):
         story.append(section("Decisions Made"))
         for d in intel["decisions"]:
@@ -1243,7 +1227,6 @@ def export_pdf(
                 story.append(Paragraph(f"  {d['rationale']}", S_label))
         story.append(hr())
 
-    # -- Action Items ----------------------------------------------------------
     if intel and intel.get("action_items"):
         story.append(section("Action Items"))
 
@@ -1276,7 +1259,6 @@ def export_pdf(
         story.append(t)
         story.append(hr())
 
-    # -- Key Quotes ------------------------------------------------------------
     if quotes:
         story.append(section("Key Quotes"))
         for q in quotes:
@@ -1290,7 +1272,6 @@ def export_pdf(
             story.append(Spacer(1, 4))
         story.append(hr())
 
-    # -- Health Detail ---------------------------------------------------------
     if health:
         story.append(section("Meeting Health Analysis"))
         health_data = [
@@ -1329,7 +1310,6 @@ def export_pdf(
 
         story.append(hr())
 
-    # -- Transcript ------------------------------------------------------------
     transcript = meeting.get("transcript", "")
     if transcript:
         story.append(section("Transcript"))
@@ -1338,7 +1318,6 @@ def export_pdf(
             if para:
                 story.append(body(para))
 
-    # -- Footer ----------------------------------------------------------------
     story.append(Spacer(1, 16))
     story.append(hr())
     story.append(Paragraph(
@@ -1346,7 +1325,6 @@ def export_pdf(
         S_meta,
     ))
 
-    # -- Build -----------------------------------------------------------------
     doc.build(story)
     buffer.seek(0)
 
@@ -1389,14 +1367,12 @@ def get_followup_email(
 
     return {"email": email, "title": title}
 
-    
 
 # =====================================================
 # ERROR HANDLERS
 # =====================================================
 
 import traceback
-
 from fastapi import HTTPException as FastAPIHTTPException
 
 @app.exception_handler(Exception)
@@ -1406,10 +1382,10 @@ async def global_exception_handler(request, exc):
             status_code=exc.status_code,
             content={"error": exc.detail, "status_code": exc.status_code}
         )
-    
+
     import traceback
     traceback.print_exc()
-    
+
     return JSONResponse(
         status_code=500,
         content={"error": str(exc), "status_code": 500}

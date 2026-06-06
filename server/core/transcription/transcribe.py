@@ -20,38 +20,28 @@ warnings.filterwarnings("ignore")
 
 from faster_whisper import WhisperModel
 
-# ── Model configuration ────────────────────────────────────────────────────────
-# model_size options:
-#   "tiny"   — fastest, lowest accuracy (~32MB)
-#   "base"   — good balance (default, ~74MB)
-#   "small"  — better accuracy (~244MB)
-#   "medium" — high accuracy (~769MB)
-#   "large-v3" — best accuracy (~1.5GB)
-#
-# compute_type options:
-#   "int8"       — fastest, CPU friendly, slight accuracy loss
-#   "float16"    — GPU only
-#   "float32"    — most accurate, higher RAM
-#
-# device options: "cpu" or "cuda"
+MODEL_SIZE = "base"
+DEVICE = "cpu"
+COMPUTE_TYPE = "int8"
 
-MODEL_SIZE   = "base"
-DEVICE       = "cpu"
-COMPUTE_TYPE = "int8"  # int8 is fastest on CPU with minimal accuracy loss
+_model = None
 
-# ── Load model once at startup ─────────────────────────────────────────────────
-# This runs when the module is first imported.
-# FastAPI imports this on startup — model is ready before first request.
 
-print(f"Loading Faster-Whisper model ({MODEL_SIZE}, {DEVICE}, {COMPUTE_TYPE})...")
+def get_whisper_model():
+    global _model
 
-_model = WhisperModel(
-    MODEL_SIZE,
-    device=DEVICE,
-    compute_type=COMPUTE_TYPE,
-)
+    if _model is None:
+        print("Loading Faster-Whisper model...")
 
-print(f"✓ Faster-Whisper model loaded")
+        _model = WhisperModel(
+            MODEL_SIZE,
+            device=DEVICE,
+            compute_type=COMPUTE_TYPE,
+        )
+
+        print("✓ Faster-Whisper model loaded")
+
+    return _model
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
@@ -107,6 +97,7 @@ def transcribe_audio_with_timestamps(audio_file: str) -> list[dict]:
         "text":  str,
     }
     """
+    model = get_whisper_model()
     segments, info = _model.transcribe(
         str(audio_file),
         beam_size=5,
