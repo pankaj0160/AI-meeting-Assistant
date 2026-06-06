@@ -44,3 +44,5 @@ librosa>=0.10.0          # Audio processing
 soundfile>=0.12.1        # Write audio files
 numpy>=1.24.0            # Numerical operations
 scipy>=1.11.0            # Scientific computing
+
+email-validator
