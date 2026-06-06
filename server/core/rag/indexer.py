@@ -27,8 +27,7 @@ def get_collection():
     return _collection
 
 
-def get_collection():
-    return _collection
+
 
 
 def index_meeting(
@@ -58,7 +57,9 @@ def index_meeting(
         for i in range(len(chunks))
     ]
 
-    _collection.upsert(
+    collection = get_collection()
+
+    collection.upsert(
         ids=ids,
         embeddings=embeddings,
         documents=chunks,
@@ -70,7 +71,8 @@ def index_meeting(
 
 
 def delete_meeting_index(meeting_id: int) -> None:
-    results = _collection.get(where={"meeting_id": meeting_id})
+    collection = get_collection()
+    results = collection.get(where={"meeting_id": meeting_id})
     if results and results["ids"]:
-        _collection.delete(ids=results["ids"])
+        collection.delete(ids=results["ids"])
         print(f"  ✓ Deleted {len(results['ids'])} chunks for meeting {meeting_id}")

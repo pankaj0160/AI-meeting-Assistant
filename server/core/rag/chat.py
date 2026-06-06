@@ -82,7 +82,7 @@ QUESTION:
 {query}"""
 
     client = get_groq_client()
-    response = _client.chat.completions.create(
+    response = client.chat.completions.create(
         model=MODEL,
         messages=[
             {"role": "system",  "content": system},
@@ -136,7 +136,8 @@ Rules:
 QUESTION:
 {query}"""
 
-    response = _client.chat.completions.create(
+    client = get_groq_client()
+    response = client.chat.completions.create(
         model=MODEL,
         messages=[
             {"role": "system",  "content": system},
