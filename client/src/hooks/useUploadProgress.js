@@ -2,7 +2,15 @@
 
 import { useState, useRef, useCallback } from 'react'
 
-const WS_BASE = 'ws://localhost:8000'
+const API_BASE =
+  import.meta.env.VITE_API_URL ||
+  'http://localhost:8000'
+
+const WS_BASE = API_BASE
+  .replace(/^https/, 'wss')
+  .replace(/^http/, 'ws')
+
+
 
 export const STEPS = [
   { id: 'download',   label: 'Downloading audio',          icon: '⬇️' },

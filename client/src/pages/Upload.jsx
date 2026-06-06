@@ -91,6 +91,9 @@ function ProgressOverlay({ pct, step, message, T }) {
   )
 }
 
+const API_BASE =
+  import.meta.env.VITE_API_URL ||
+  'http://localhost:8000'
 // ── Main ───────────────────────────────────────────────────────────────────────
 export default function Upload() {
   const { T }    = useTheme()
@@ -126,7 +129,7 @@ export default function Upload() {
       const token = getToken()
       const form  = new FormData()
       form.append('file', file)
-      const res = await fetch(`/api/upload/progress?job_id=${jobId}`, {
+      const res = await fetch(`${API_BASE}/upload/progress?job_id=${jobId}`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` },
         body: form,
@@ -145,7 +148,7 @@ export default function Upload() {
     try {
       const jobId = await prog.start()
       const token = getToken()
-      const res = await fetch(`/api/youtube/progress?job_id=${jobId}`, {
+      const res = await fetch(`${API_BASE}/youtube/progress?job_id=${jobId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ url: ytUrl.trim(), job_id: jobId }),
