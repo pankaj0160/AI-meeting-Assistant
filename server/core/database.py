@@ -2,8 +2,10 @@ import sqlite3
 import datetime
 from pathlib import Path
 
-DB_NAME = Path("meetings.db")
 
+DB_NAME = Path(__file__).resolve().parents[1] / "meetings.db"
+
+print("MAIN DB =", DB_NAME.resolve())
 
 # ─── Phase 1 — unchanged ──────────────────────────────────────────────────────
 

@@ -7,7 +7,21 @@ import logging
 
 import yt_dlp
 
+
+
+
 logger = logging.getLogger(__name__)
+
+# ── Resolve upload dir relative to project root ───────────────────────────────
+# File location:
+# SUMMLY/server/core/transcription/youtube_downloader.py
+
+_HERE = Path(__file__).resolve().parent
+_PROJECT_ROOT = _HERE.parent.parent.parent
+
+DEFAULT_AUDIO_DIR = str(
+    _PROJECT_ROOT / "server" / "uploads" / "audio"
+)
 
 # ── Cookie configuration ──────────────────────────────────────────────────────
 # Set YT_COOKIES_PATH env var to point to your exported cookies.txt (optional).
@@ -113,7 +127,7 @@ def sanitize_filename(name: str) -> str:
 
 def download_youtube(
     url: str,
-    output_dir: str = "uploads/audio",
+    output_dir: str = None,
 ) -> dict:
     """
     Downloads a YouTube video's audio as an MP3.
@@ -143,9 +157,9 @@ def download_youtube(
     if not url or not url.strip():
         raise ValueError("YouTube URL must not be empty.")
 
-    # Auto-update yt-dlp once per process lifetime — this is the single most
-    # important step. YouTube deploys n-challenge updates frequently; an
-    # outdated yt-dlp fails even with valid cookies and correct client args.
+    if output_dir is None:
+        output_dir = DEFAULT_AUDIO_DIR
+
     _ensure_yt_dlp_updated()
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)

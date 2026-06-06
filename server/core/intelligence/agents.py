@@ -4,7 +4,7 @@ import os
 from groq import Groq
 from dotenv import load_dotenv
 
-from core.intelligence.schemas import ActionItem, Decision, Topic
+from server.core.intelligence.schemas import ActionItem, Decision, Topic
 
 load_dotenv()
 

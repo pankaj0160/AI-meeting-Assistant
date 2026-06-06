@@ -2,8 +2,8 @@
 
 from rank_bm25 import BM25Okapi
 
-from core.rag.embedder import embed_texts
-from core.rag.indexer import get_collection
+from server.core.rag.embedder import embed_texts
+from server.core.rag.indexer import get_collection
 
 
 def _get_all_chunks_for_meeting(meeting_id: int) -> list[dict]:

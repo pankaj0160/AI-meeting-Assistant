@@ -2,13 +2,13 @@ from typing import TypedDict
 
 from langgraph.graph import StateGraph, END
 
-from core.intelligence.agents import (
+from server.core.intelligence.agents import (
     run_summary_agent,
     run_action_item_agent,
     run_decision_agent,
     run_topic_agent,
 )
-from core.intelligence.schemas import (
+from server.core.intelligence.schemas import (
     MeetingIntelligence,
     ActionItem,
     Decision,

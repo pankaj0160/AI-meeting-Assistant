@@ -160,7 +160,7 @@ export default function Navbar() {
               Go to App →
             </button>
           ) : (
-            <div style={{ display: 'flex', gap: '8px', marginLeft: '8px' }}>
+            <div style={{ display: 'flex', gap: '8px', marginLeft: '8px', height:'60px' }}>
               <button
                 onClick={() => navigate('/login')}
                 style={{

@@ -4,7 +4,7 @@ import os
 from groq import Groq
 from dotenv import load_dotenv
 
-from core.rag.hybrid_search import hybrid_search
+from server.core.rag.hybrid_search import hybrid_search
 
 load_dotenv()
 

@@ -4,8 +4,8 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Optional
 
-from core.auth.service import decode_access_token, get_user_by_id
-from core.auth.models import User
+from server.core.auth.service import decode_access_token, get_user_by_id
+from server.core.auth.models import User
 
 bearer = HTTPBearer(auto_error=False)
 

@@ -3,12 +3,12 @@ Summly FastAPI Backend
 Phase 2 Complete with Meeting Intelligence Engine
 """
 
-from core.transcription.audio_cleaner import AudioCleaner
+from server.core.transcription.audio_cleaner import AudioCleaner
 import datetime
-from core.auth.dependencies import get_current_user, get_optional_user
-from core.auth.models import User
+from server.core.auth.dependencies import get_current_user, get_optional_user
+from server.core.auth.models import User
 from typing import Optional
-from core.auth.router import router as auth_router
+from server.core.auth.router import router as auth_router
 from fastapi import Depends, FastAPI, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect, Query
 from fastapi import WebSocket, WebSocketDisconnect
 import asyncio
@@ -21,11 +21,11 @@ import shutil
 import time
 import logging
 
-from core.transcription.audio_extractor import extract_audio
-from core.transcription.transcribe import transcribe_audio
-from core.transcription.youtube_downloader import download_youtube
+from server.core.transcription.audio_extractor import extract_audio
+from server.core.transcription.transcribe import transcribe_audio
+from server.core.transcription.youtube_downloader import download_youtube
 
-from core.database import (
+from server.core.database import (
     init_db,
     get_all_transcripts,
     save_transcript_and_get_id,
@@ -34,15 +34,15 @@ from core.database import (
     get_meeting_by_id,
 )
 
-from core.intelligence.workflow import analyze_transcript
-from core.rag.indexer import index_meeting
-from core.rag.chat import chat_with_meeting, chat_across_meetings
+from server.core.intelligence.workflow import analyze_transcript
+from server.core.rag.indexer import index_meeting
+from server.core.rag.chat import chat_with_meeting, chat_across_meetings
 
 
-from core.intelligence.health  import analyze_meeting_health
-from core.intelligence.quotes  import extract_key_quotes
-from core.intelligence.titles  import generate_meeting_title
-from core.database import (
+from server.core.intelligence.health  import analyze_meeting_health
+from server.core.intelligence.quotes  import extract_key_quotes
+from server.core.intelligence.titles  import generate_meeting_title
+from server.core.database import (
     init_db,
     get_all_transcripts,
     save_transcript_and_get_id,
@@ -59,8 +59,8 @@ from core.database import (
 )
 
 
-from core.intelligence.followup import generate_followup_email
-from core.database import get_meeting_title
+from server.core.intelligence.followup import generate_followup_email
+from server.core.database import get_meeting_title
 from fastapi.responses import StreamingResponse
 import io
 
@@ -83,6 +83,16 @@ app = FastAPI(
     version="2.0.0",
     description="AI Meeting Intelligence Platform Backend"
 )
+
+
+@app.middleware("http")
+async def request_logger(request, call_next):
+    print(f"REQUEST >>> {request.method} {request.url.path}")
+
+    response = await call_next(request)
+
+    print(f"RESPONSE <<< {response.status_code}")
+    return response
 
 # CORS for local frontend
 app.add_middleware(
@@ -312,7 +322,7 @@ async def upload_file(
             if enable_audio_cleaning:
                 try:
                     logger.info("Cleaning uploaded audio file...")
-                    from core.transcription.audio_cleaner import AudioCleaner
+                    from server.core.transcription.audio_cleaner import AudioCleaner
                     cleaner = AudioCleaner(sr=16000)
                     result = cleaner.clean_audio(
                         wav_file,
@@ -621,7 +631,7 @@ def chat_search(
 def get_stats(current_user: User = Depends(get_current_user)):
     """Aggregate stats across all meetings."""
     try:
-        from core.database import get_all_transcripts, get_meeting_intelligence
+        from server.core.database import get_all_transcripts, get_meeting_intelligence
         meetings = get_all_transcripts(user_id=current_user.id)
         total_meetings   = len(meetings)
         total_decisions  = 0
@@ -657,8 +667,8 @@ def get_stats(current_user: User = Depends(get_current_user)):
 @app.post("/rag/reindex", tags=["RAG"])
 def reindex_all(current_user: User = Depends(get_current_user)):
     try:
-        from core.database import get_all_meetings_for_indexing
-        from core.rag.indexer import index_meeting
+        from server.core.database import get_all_meetings_for_indexing
+        from server.core.rag.indexer import index_meeting
         meetings = get_all_meetings_for_indexing(user_id=current_user.id)
         indexed = 0
         for m in meetings:
@@ -1385,25 +1395,24 @@ def get_followup_email(
 # ERROR HANDLERS
 # =====================================================
 
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request, exc):
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "error": exc.detail,
-            "status_code": exc.status_code
-        }
-    )
+import traceback
+
+from fastapi import HTTPException as FastAPIHTTPException
 
 @app.exception_handler(Exception)
-async def general_exception_handler(request, exc):
-    logger.error(f"Unhandled exception: {exc}", exc_info=True)
+async def global_exception_handler(request, exc):
+    if isinstance(exc, FastAPIHTTPException):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"error": exc.detail, "status_code": exc.status_code}
+        )
+    
+    import traceback
+    traceback.print_exc()
+    
     return JSONResponse(
         status_code=500,
-        content={
-            "error": "Internal server error",
-            "status_code": 500
-        }
+        content={"error": str(exc), "status_code": 500}
     )
 
 # =====================================================

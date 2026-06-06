@@ -2,21 +2,21 @@
 
 from fastapi import APIRouter, HTTPException, Depends, status
 
-from core.auth.schemas import (
+from server.core.auth.schemas import (
     RegisterRequest, LoginRequest,
     ForgotPasswordRequest, ResetPasswordRequest,
     UpdateProfileRequest, ChangePasswordRequest,
     UserPublic, AuthResponse, MessageResponse,
 )
-from core.auth.service import (
+from server.core.auth.service import (
     create_user, authenticate_user,
     create_access_token, get_user_by_email,
     create_reset_token, consume_reset_token,
     update_user_profile, update_user_password,
     verify_password,
 )
-from core.auth.dependencies import get_current_user
-from core.auth.models import User
+from server.core.auth.dependencies import get_current_user
+from server.core.auth.models import User
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -60,19 +60,31 @@ def register(body: RegisterRequest):
 
 @router.post("/login", response_model=AuthResponse)
 def login(body: LoginRequest):
-    """
-    Login with email + password.
-    Returns JWT token + user object on success.
-    """
-    user = authenticate_user(body.email, body.password)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password",
+    print("LOGIN ROUTE HIT")
+    try:
+        print("LOGIN EMAIL:", body.email)
+
+        user = authenticate_user(body.email, body.password)
+        print("USER:", user)
+
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid email or password",
+            )
+
+        token = create_access_token(user.id, user.email)
+        print("TOKEN CREATED")
+
+        return AuthResponse(
+            access_token=token,
+            user=_to_public(user)
         )
 
-    token = create_access_token(user.id, user.email)
-    return AuthResponse(access_token=token, user=_to_public(user))
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise
 
 
 # ── Get current user ───────────────────────────────────────────────────────────

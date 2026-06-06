@@ -1,7 +1,7 @@
 # core/rag/retriever.py
 
-from core.rag.embedder import embed_texts
-from core.rag.indexer import get_collection
+from server.core.rag.embedder import embed_texts
+from server.core.rag.indexer import get_collection
 
 
 def retrieve_from_meeting(

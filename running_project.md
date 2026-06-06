@@ -1,9 +1,13 @@
 # Backend
-uvicorn main:app --reload
+uvicorn server.main:app --reload
 
 # Frontend (Streamlit)
 cd client && npm run dev
 
+
+# kill all terminals
+
+taskkill /F /IM python.exe
 
 
 ## implementation plan currently

@@ -1,15 +1,15 @@
 from pathlib import Path
 
-from core.transcription.audio_extractor import extract_audio
-from core.transcription.transcribe import transcribe_audio
-from core.transcription.youtube_downloader import download_youtube
-from core.database import (
+from server.core.transcription.audio_extractor import extract_audio
+from server.core.transcription.transcribe import transcribe_audio
+from server.core.transcription.youtube_downloader import download_youtube
+from server.core.database import (
     init_db,
     save_transcript_and_get_id,
     save_meeting_intelligence,
 )
-from core.intelligence.workflow import analyze_transcript
-from core.rag.indexer import index_meeting
+from server.core.intelligence.workflow import analyze_transcript
+from server.core.rag.indexer import index_meeting
 
 
 # ─── Phase 2 internal helper ──────────────────────────────────────────────────

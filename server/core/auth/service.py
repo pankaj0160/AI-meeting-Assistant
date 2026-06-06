@@ -16,17 +16,22 @@ from jose import jwt, JWTError
 from passlib.context import CryptContext
 from dotenv import load_dotenv
 
-from core.auth.models import User
+from server.core.auth.models import User
 
 load_dotenv()
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
+# service.py — top section, replace everything between "── Config ──" and pwd_ctx
+
 SECRET_KEY  = os.getenv("JWT_SECRET_KEY", "summly-secret-key-change-in-production")
 ALGORITHM   = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 
-DB_NAME = Path("meetings.db")
+from server.core.database import DB_NAME   # ← already present, keep ONLY this
+
+print("AUTH DB =", DB_NAME)
+print("AUTH DB =", DB_NAME)
 
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -39,11 +44,10 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_ctx.verify(plain[:72], hashed)
-
-
-def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_ctx.verify(plain, hashed)
+    try:
+        return pwd_ctx.verify(plain[:72], hashed)
+    except Exception:
+        return False
 
 
 # ── JWT helpers ────────────────────────────────────────────────────────────────
@@ -173,18 +177,19 @@ def update_user_password(user_id: int, new_password: str) -> None:
     conn.close()
 
 
-def authenticate_user(email: str, password: str) -> Optional[User]:
-    """
-    Returns User if credentials are valid, None otherwise.
-    Also updates last_login on success.
-    """
-    user = get_user_by_email(email)
-    if not user:
+def authenticate_user(email: str, password: str):
+    try:
+        user = get_user_by_email(email)
+        if not user:
+            return None
+        if not verify_password(password, user.password_hash):
+            return None
+        update_last_login(user.id)
+        return user
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
         return None
-    if not verify_password(password, user.password_hash):
-        return None
-    update_last_login(user.id)
-    return user
 
 
 # ── Password reset tokens (stored in DB) ──────────────────────────────────────

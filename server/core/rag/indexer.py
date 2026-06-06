@@ -3,7 +3,7 @@
 import chromadb
 from pathlib import Path
 
-from core.rag.embedder import chunk_transcript, embed_texts
+from server.core.rag.embedder import chunk_transcript, embed_texts
 
 _CHROMA_PATH = Path("chroma_db")
 _client = chromadb.PersistentClient(path=str(_CHROMA_PATH))
