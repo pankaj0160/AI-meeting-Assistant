@@ -46,3 +46,4 @@ numpy>=1.24.0            # Numerical operations
 scipy>=1.11.0            # Scientific computing
 
 email-validator
+faster-whisper
