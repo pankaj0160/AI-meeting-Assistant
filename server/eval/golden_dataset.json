@@ -1,0 +1,72 @@
+[
+  {
+    "question": "What is the main concern discussed in the meeting?",
+    "ground_truth": "The main concern is students skipping school, particularly on Fridays.",
+    "contexts": [
+      "I have our list of chronically absent students here and I've been noticing a troubling trend. A lot of students are skipping on Fridays."
+    ]
+  },
+  {
+    "question": "Why are students finding it hard to come to school on Fridays?",
+    "ground_truth": "Students find it hard to get out of bed on Fridays.",
+    "contexts": [
+      "I've heard some of my mentees talking about how it's really hard to get out of bed on Fridays."
+    ]
+  },
+  {
+    "question": "What idea was suggested to encourage students to come on Fridays?",
+    "ground_truth": "A pancake breakfast was suggested to encourage students to come on Fridays.",
+    "contexts": [
+      "It might be good if we did something like a pancake breakfast to encourage them to come. I think that's a great idea. Let's try that next week."
+    ]
+  },
+  {
+    "question": "Why have students been getting sick?",
+    "ground_truth": "Students have been getting sick because it is getting colder outside.",
+    "contexts": [
+      "It might also be because a lot of students have been getting sick now that it's getting colder outside."
+    ]
+  },
+  {
+    "question": "What symptoms did sick students have?",
+    "ground_truth": "Students had symptoms like sniffling and coughing.",
+    "contexts": [
+      "I've had a number of students come by my office with symptoms like sniffling and coughing."
+    ]
+  },
+  {
+    "question": "What action was decided to help students avoid getting sick?",
+    "ground_truth": "They decided to put up posters with tips for not getting sick such as washing hands after using the bathroom.",
+    "contexts": [
+      "We should put up posters with tips for not getting sick since it's almost flu season. Like, you know, wash your hands after the bathroom, stuff like that."
+    ]
+  },
+  {
+    "question": "How many days has John Smith missed?",
+    "ground_truth": "John Smith has missed seven days already.",
+    "contexts": [
+      "There's a student I've noticed here, John Smith. He's missed seven days already and it's only November."
+    ]
+  },
+  {
+    "question": "Why has John Smith been missing school?",
+    "ground_truth": "John Smith has been missing school because he is stressed out from helping his parents take care of his younger siblings during the day.",
+    "contexts": [
+      "I talked to John today and he's really stressed out. He's been dealing with helping his parents take care of his younger siblings during the day."
+    ]
+  },
+  {
+    "question": "What was suggested to help John Smith?",
+    "ground_truth": "It was suggested that John Smith should speak to the guidance counselor.",
+    "contexts": [
+      "It might actually be a good idea if he spoke to the guidance counselor a little bit. I can talk to John today if you want to send him to my office after you meet with him."
+    ]
+  },
+  {
+    "question": "What help was offered for John's family?",
+    "ground_truth": "They offered to look for free or low cost child care resources in the community to share with John and his family.",
+    "contexts": [
+      "I can help out with the family's child care needs. I'll look for some free or low cost resources in the community to share with John and he can share them with his family."
+    ]
+  }
+]
