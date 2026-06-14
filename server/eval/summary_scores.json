@@ -1,9 +1,8 @@
 {
-  "faithfulness": 0.1,
+  "faithfulness": 0.05,
   "answer_relevancy": 0.0,
   "context_recall": 1.0,
-  "overall_avg": 0.3667,
+  "overall_avg": 0.35,
   "num_questions": 10,
-  "judge_model": "groq/llama-3.3-70b-versatile",
-  "embedding_model": "sentence-transformers/all-MiniLM-L6-v2"
+  "model": "groq/llama-3.1-8b-instant"
 }
