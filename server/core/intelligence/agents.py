@@ -1,8 +1,11 @@
+# core/intelligence/agents.py
 import json
 import os
+import time
 
 from groq import Groq
 from dotenv import load_dotenv
+from langfuse import Langfuse
 
 from server.core.intelligence.schemas import ActionItem, Decision, Topic
 
@@ -11,23 +14,66 @@ load_dotenv()
 _client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 MODEL = "llama-3.3-70b-versatile"
 
+# ── Langfuse client ──────────────────────────────────────────────────────────
+# This connects to your Langfuse dashboard.
+# It reads LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_HOST from .env
+_langfuse = Langfuse()
 
-def _call_groq(system_prompt: str, user_content: str) -> str:
+
+def _call_groq(system_prompt: str, user_content: str, span_name: str = "groq-call") -> str:
     """
     Single shared Groq caller used by all agents.
-    temperature=0.1 keeps outputs deterministic and factual.
-    If you ever switch models or add retries, change it here only.
+    Now wrapped with Langfuse tracing — records latency + token usage.
+
+    span_name: label shown in Langfuse dashboard (e.g. "summary_agent")
     """
-    response = _client.chat.completions.create(
+    # Start a Langfuse generation span
+    # A "generation" is Langfuse's term for an LLM call specifically
+    generation = _langfuse.generation(
+        name=span_name,
         model=MODEL,
-        messages=[
-            {"role": "system",  "content": system_prompt},
-            {"role": "user",    "content": user_content},
+        input=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_content},
         ],
-        temperature=0.1,
-        max_tokens=2048,
     )
-    return response.choices[0].message.content.strip()
+
+    start_time = time.time()
+
+    try:
+        response = _client.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": user_content},
+            ],
+            temperature=0.1,
+            max_tokens=2048,
+        )
+
+        result = response.choices[0].message.content.strip()
+        elapsed = time.time() - start_time
+
+        # Record the result and token usage in Langfuse
+        generation.end(
+            output=result,
+            usage={
+                "input":  response.usage.prompt_tokens,
+                "output": response.usage.completion_tokens,
+                "total":  response.usage.total_tokens,
+            },
+            metadata={"latency_seconds": round(elapsed, 3)},
+        )
+
+        return result
+
+    except Exception as e:
+        # Record the error so it shows up in the dashboard
+        generation.end(
+            output=f"ERROR: {str(e)}",
+            metadata={"error": True},
+        )
+        raise
 
 
 def _clean_json(raw: str) -> str:
@@ -35,7 +81,7 @@ def _clean_json(raw: str) -> str:
     return raw.replace("```json", "").replace("```", "").strip()
 
 
-# ─── Agent 1: Summary ─────────────────────────────────────────────────────────
+# ─── Agent 1: Summary ────────────────────────────────────────────────────────
 
 def run_summary_agent(transcript: str) -> str:
     system = """You are an expert meeting analyst.
@@ -48,10 +94,11 @@ Rules:
 - Do NOT list action items or decisions here
 - Return ONLY the summary text, no labels, no headings"""
 
-    return _call_groq(system, f"TRANSCRIPT:\n{transcript}")
+    # span_name="summary_agent" → this label appears in Langfuse dashboard
+    return _call_groq(system, f"TRANSCRIPT:\n{transcript}", span_name="summary_agent")
 
 
-# ─── Agent 2: Action Items ────────────────────────────────────────────────────
+# ─── Agent 2: Action Items ───────────────────────────────────────────────────
 
 def run_action_item_agent(transcript: str) -> list[ActionItem]:
     system = """You are an expert meeting analyst.
@@ -71,7 +118,7 @@ Example output:
 
 Return ONLY a valid JSON array. No explanation. No markdown. No preamble."""
 
-    raw = _call_groq(system, f"TRANSCRIPT:\n{transcript}")
+    raw = _call_groq(system, f"TRANSCRIPT:\n{transcript}", span_name="action_item_agent")
 
     try:
         items = json.loads(_clean_json(raw))
@@ -80,7 +127,7 @@ Return ONLY a valid JSON array. No explanation. No markdown. No preamble."""
         return []
 
 
-# ─── Agent 3: Decisions ───────────────────────────────────────────────────────
+# ─── Agent 3: Decisions ──────────────────────────────────────────────────────
 
 def run_decision_agent(transcript: str) -> list[Decision]:
     system = """You are an expert meeting analyst.
@@ -99,7 +146,7 @@ Example output:
 
 Return ONLY a valid JSON array. No explanation. No markdown. No preamble."""
 
-    raw = _call_groq(system, f"TRANSCRIPT:\n{transcript}")
+    raw = _call_groq(system, f"TRANSCRIPT:\n{transcript}", span_name="decision_agent")
 
     try:
         items = json.loads(_clean_json(raw))
@@ -126,7 +173,7 @@ Example output:
 
 Return ONLY a valid JSON array. No explanation. No markdown. No preamble."""
 
-    raw = _call_groq(system, f"TRANSCRIPT:\n{transcript}")
+    raw = _call_groq(system, f"TRANSCRIPT:\n{transcript}", span_name="topic_agent")
 
     try:
         items = json.loads(_clean_json(raw))
