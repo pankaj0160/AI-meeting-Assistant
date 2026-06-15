@@ -1,62 +1,9 @@
 [
   {
-    "question": "What is the main concern discussed in the meeting?",
-    "faithfulness": 0.0,
-    "answer_relevancy": 0.0,
-    "context_recall": 1.0
-  },
-  {
-    "question": "Why are students finding it hard to come to school on Fridays?",
-    "faithfulness": 0.0,
-    "answer_relevancy": -0.0,
-    "context_recall": 1.0
-  },
-  {
-    "question": "What idea was suggested to encourage students to come on Fridays?",
-    "faithfulness": 0.0,
-    "answer_relevancy": -0.0,
-    "context_recall": 1.0
-  },
-  {
-    "question": "Why have students been getting sick?",
-    "faithfulness": 0.5,
-    "answer_relevancy": 0.0,
-    "context_recall": 1.0
-  },
-  {
-    "question": "What symptoms did sick students have?",
-    "faithfulness": 0.0,
-    "answer_relevancy": 0.0,
-    "context_recall": 1.0
-  },
-  {
-    "question": "What action was decided to help students avoid getting sick?",
-    "faithfulness": 0.0,
-    "answer_relevancy": 0.0,
-    "context_recall": 1.0
-  },
-  {
-    "question": "How many days has John Smith missed?",
-    "faithfulness": 0.0,
-    "answer_relevancy": 0.0,
-    "context_recall": 1.0
-  },
-  {
-    "question": "Why has John Smith been missing school?",
-    "faithfulness": 0.0,
-    "answer_relevancy": 0.0,
-    "context_recall": 1.0
-  },
-  {
-    "question": "What was suggested to help John Smith?",
-    "faithfulness": 0.0,
-    "answer_relevancy": 0.0,
-    "context_recall": 1.0
-  },
-  {
-    "question": "What help was offered for John's family?",
-    "faithfulness": 0.0,
-    "answer_relevancy": 0.0,
-    "context_recall": 1.0
+    "question": "Why are students skipping on Fridays?",
+    "answer": "According to the meeting, students are skipping on Fridays possibly because \"it's really hard to get out of bed on Fridays\" as mentioned by some mentees, and also because \"a lot of students have been getting sick now that it's getting colder outside.\"",
+    "faithfulness": null,
+    "answer_relevancy": null,
+    "context_recall": null
   }
 ]

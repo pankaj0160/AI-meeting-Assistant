@@ -26,3 +26,27 @@ class MeetingIntelligence(BaseModel):
     decisions: list[Decision] = Field(default_factory=list)
     topics: list[Topic] = Field(default_factory=list)
     generated_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+
+
+
+# ── Instructor list wrappers ──────────────────────────────────────────────────
+# Instructor needs a top-level model to extract into.
+# These wrap list fields so we can extract multiple items at once.
+
+class ActionItemList(BaseModel):
+    items: list[ActionItem] = Field(
+        default_factory=list,
+        description="All action items extracted from the transcript"
+    )
+
+class DecisionList(BaseModel):
+    items: list[Decision] = Field(
+        default_factory=list,
+        description="All decisions extracted from the transcript"
+    )
+
+class TopicList(BaseModel):
+    items: list[Topic] = Field(
+        default_factory=list,
+        description="All topics discussed in the transcript"
+    )
