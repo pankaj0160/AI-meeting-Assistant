@@ -1,8 +1,10 @@
 {
-  "faithfulness": 0.05,
-  "answer_relevancy": 0.0,
+  "faithfulness": 0.925,
+  "answer_relevancy": 0.7622,
   "context_recall": 1.0,
-  "overall_avg": 0.35,
+  "overall_avg": 0.8957,
   "num_questions": 10,
-  "model": "groq/llama-3.1-8b-instant"
+  "scored": 10,
+  "judge_model": "groq/llama-3.3-70b-versatile",
+  "embedding_model": "sentence-transformers/all-MiniLM-L6-v2"
 }

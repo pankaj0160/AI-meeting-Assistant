@@ -2,8 +2,71 @@
   {
     "question": "Why are students skipping on Fridays?",
     "answer": "According to the meeting, students are skipping on Fridays possibly because \"it's really hard to get out of bed on Fridays\" as mentioned by some mentees, and also because \"a lot of students have been getting sick now that it's getting colder outside.\"",
-    "faithfulness": null,
-    "answer_relevancy": null,
-    "context_recall": null
+    "faithfulness": 1.0,
+    "answer_relevancy": 1.0,
+    "context_recall": 1.0
+  },
+  {
+    "question": "What idea was suggested to encourage students to come on Fridays?",
+    "answer": "A pancake breakfast was suggested to encourage students to come on Fridays.",
+    "faithfulness": 1.0,
+    "answer_relevancy": 0.99,
+    "context_recall": 1.0
+  },
+  {
+    "question": "Why are students getting sick?",
+    "answer": "It's getting colder outside, and as a result, a number of students have been coming by the office with symptoms like sniffling and coughing, indicating it's almost flu season.",
+    "faithfulness": 1.0,
+    "answer_relevancy": 0.327,
+    "context_recall": 1.0
+  },
+  {
+    "question": "What should be done to prevent students from getting sick?",
+    "answer": "Put up posters with tips for not getting sick, such as \"wash your hands after the bathroom\".",
+    "faithfulness": 1.0,
+    "answer_relevancy": 0.644,
+    "context_recall": 1.0
+  },
+  {
+    "question": "How many days has John Smith missed?",
+    "answer": "John Smith has missed 7 days already and it's only November.",
+    "faithfulness": 1.0,
+    "answer_relevancy": 0.947,
+    "context_recall": 1.0
+  },
+  {
+    "question": "Why has John Smith been absent?",
+    "answer": "John Smith has been absent because he's been dealing with helping his parents take care of his younger siblings during the day, and he's really stressed out.",
+    "faithfulness": 1.0,
+    "answer_relevancy": 1.0,
+    "context_recall": 1.0
+  },
+  {
+    "question": "What was recommended for John Smith?",
+    "answer": "It was recommended that John Smith speak to the guidance counselor, and also that he be sent to the speaker's office after meeting with them, to help with his stress and family childcare needs.",
+    "faithfulness": 0.75,
+    "answer_relevancy": 0.676,
+    "context_recall": 1.0
+  },
+  {
+    "question": "What will be done to help Johns family?",
+    "answer": "I'll look for some free or low cost resources in the community to share with John and he can share them with his family, to help out with the family's child care needs.",
+    "faithfulness": 1.0,
+    "answer_relevancy": 0.682,
+    "context_recall": 1.0
+  },
+  {
+    "question": "What is the main topic of this meeting?",
+    "answer": "The main topic of this meeting is student attendance and success, specifically addressing the issue of chronically absent students, including one student named John Smith.",
+    "faithfulness": 1.0,
+    "answer_relevancy": 0.659,
+    "context_recall": 1.0
+  },
+  {
+    "question": "Who will talk to John Smith after the meeting?",
+    "answer": "The speaker will talk to John Smith after the meeting, and also possibly the guidance counselor, as it was suggested that \"it might actually be a good idea if he spoke to the guidance counselor a little bit.\" Additionally, the speaker says \"I can talk to John today if you want to send him to my office after you meet with him.\"",
+    "faithfulness": 0.5,
+    "answer_relevancy": 0.697,
+    "context_recall": 1.0
   }
 ]
