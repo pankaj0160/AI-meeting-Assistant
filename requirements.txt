@@ -171,5 +171,7 @@ yt-dlp==2026.5.25.234532.dev0
 yt-dlp-invidious==0.1.1
 zstandard==0.25.0
 pytest==8.3.5
-langfuse
-instructor
+
+langfuse==2.59.3
+instructor==1.7.2
+openai==1.86.0
