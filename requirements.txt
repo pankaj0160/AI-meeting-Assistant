@@ -172,3 +172,4 @@ yt-dlp-invidious==0.1.1
 zstandard==0.25.0
 pytest==8.3.5
 langfuse
+instructor
