@@ -1,6 +1,5 @@
 name: Run Tests
 
-# Trigger: run on every push and every pull request
 on:
   push:
   pull_request:
@@ -10,25 +9,21 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Download your code
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Step 2: Install Python 3.12
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      # Step 3: Install your dependencies
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # Step 4: Run the tests
       - name: Run pytest
         run: pytest server/tests/ -v
-
-        # These env vars are needed so imports don't fail
-        # The tests mock actual API calls so no real keys are used
         env:
           GROQ_API_KEY: "fake-key-for-testing"
+          LANGFUSE_PUBLIC_KEY: "fake-key-for-testing"
+          LANGFUSE_SECRET_KEY: "fake-key-for-testing"
+          LANGFUSE_HOST: "https://cloud.langfuse.com"
