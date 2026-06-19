@@ -18,8 +18,10 @@ jobs:
           python-version: "3.12"
           cache: "pip"
 
-      - name: Install test dependencies
-        run: pip install -r requirements-test.txt
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
 
       - name: Run pytest
         run: python -m pytest server/tests/ -v
