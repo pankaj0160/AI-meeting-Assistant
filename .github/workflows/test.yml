@@ -16,13 +16,13 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: "pip"                    # ← add this line
+          cache: "pip"
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+      - name: Install test dependencies
+        run: pip install -r requirements-test.txt
 
       - name: Run pytest
-        run: pytest server/tests/ -v
+        run: python -m pytest server/tests/ -v
         env:
           GROQ_API_KEY: "fake-key-for-testing"
           LANGFUSE_PUBLIC_KEY: "fake-key-for-testing"

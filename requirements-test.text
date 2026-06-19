@@ -1,0 +1,38 @@
+# requirements-test.txt
+# Lightweight deps for CI — no torch, no whisper, no chromadb
+
+# Test runner
+pytest==8.3.5
+pytest-asyncio==0.24.0       # if you have async tests
+httpx==0.28.1                # for FastAPI TestClient (async)
+
+# Web framework (needed to import your app)
+fastapi==0.136.3
+starlette==1.2.0
+python-multipart==0.0.29
+uvicorn==0.48.0
+
+# Auth
+python-jose==3.5.0
+passlib==1.7.4
+bcrypt==4.0.1
+
+# Config / validation
+pydantic==2.13.4
+pydantic-settings==2.14.1
+python-dotenv==1.2.2
+
+# LLM clients (lightweight — no GPU deps)
+groq==0.37.1
+openai==1.86.0
+instructor==1.8.3
+
+# Observability
+langfuse==2.59.3
+
+# PDF
+reportlab==4.5.1
+
+# Utilities
+requests==2.34.2
+httpx==0.28.1
