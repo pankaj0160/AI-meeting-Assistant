@@ -1,0 +1,79 @@
+# =============================================================================
+# Summly — .dockerignore
+# Save this file as: .dockerignore (with the dot)
+#
+# Tells Docker what to SKIP when it sees "COPY . ." in the Dockerfile.
+# Works exactly like .gitignore but for Docker builds.
+#
+# Without this, Docker would copy __pycache__, your venv, .git history,
+# and multi-MB audio files into the image — making it huge and slow.
+# =============================================================================
+
+# ── Python cache ──────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+# NEVER copy your local venv — the container builds its own from requirements.txt
+.venv/
+venv/
+env/
+ENV/
+
+# ── Test artifacts ────────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# ── Git history ───────────────────────────────────────────────────────────────
+# Can be hundreds of MB for large repos — never needed inside a container
+.git/
+.gitignore
+.gitattributes
+
+# ── IDE / editor files ────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# ── Large sample media (mounted as volumes instead) ───────────────────────────
+server/uploads/audio/
+server/uploads/video/
+
+# ── Database (mounted as a volume — don't bake a snapshot into the image) ─────
+meetings.db
+
+# ── Jupyter / eval ────────────────────────────────────────────────────────────
+server/eval/
+*.ipynb
+.ipynb_checkpoints/
+
+# ── ChromaDB (also mounted as a named volume) ─────────────────────────────────
+chroma_db/
+
+# ── Docker files themselves ───────────────────────────────────────────────────
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# ── Docs ─────────────────────────────────────────────────────────────────────
+*.md
+docs/
+
+# ── Transcripts (mounted as volume) ──────────────────────────────────────────
+server/uploads/transcripts/
+
+# ── Environment variables ─────────────────────────────────────────────────────
+.env
+.env.*
+*.env

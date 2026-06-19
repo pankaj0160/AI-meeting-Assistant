@@ -1,0 +1,100 @@
+services:
+  api:
+    build: .
+    container_name: summly_api
+    restart: unless-stopped
+
+    ports:
+      - "8000:8000"
+
+    environment:
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - HF_TOKEN=${HF_TOKEN}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
+      - LANGFUSE_BASE_URL=${LANGFUSE_BASE_URL:-https://cloud.langfuse.com}
+      - REDIS_URL=redis://redis:6379/0
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+
+    volumes:
+      - ./server/uploads:/app/server/uploads
+      - ./meetings.db:/app/meetings.db
+      - chroma_data:/app/chroma_db
+
+    depends_on:
+      redis:
+        condition: service_healthy
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+
+  worker:
+    build: .
+    container_name: summly_worker
+    restart: unless-stopped
+
+    command: celery -A server.core.tasks.celery_app worker --loglevel=info --concurrency=2
+
+    environment:
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - HF_TOKEN=${HF_TOKEN}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
+      - LANGFUSE_BASE_URL=${LANGFUSE_BASE_URL:-https://cloud.langfuse.com}
+      - REDIS_URL=redis://redis:6379/0
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+
+    volumes:
+      - ./server/uploads:/app/server/uploads
+      - ./meetings.db:/app/meetings.db
+      - chroma_data:/app/chroma_db
+
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  flower:
+    build: .
+    container_name: summly_flower
+    restart: unless-stopped
+
+    command: celery -A server.core.tasks.celery_app flower --port=5555
+
+    ports:
+      - "5555:5555"
+
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - PYTHONPATH=/app
+
+    depends_on:
+      - redis
+      - worker
+
+  redis:
+    image: redis:7-alpine
+    container_name: summly_redis
+    restart: unless-stopped
+
+    ports:
+      - "6379:6379"
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  chroma_data:
+    driver: local

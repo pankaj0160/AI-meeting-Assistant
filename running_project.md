@@ -43,3 +43,31 @@ Phase 8   → Calendar integration
 
 Phase 9A  → Faster-Whisper migration
 Phase 9B  → Background job queue
+
+
+Summly — Production Roadmap
+🔴 Week 3 (Current) — Infrastructure
+✅ Redis + Celery async pipeline
+✅ Multi-meeting RAG chat
+⬜ Action Item Tracker (Instructor structured extraction)
+⬜ Speaker Diarization (pyannote.audio)
+🟡 Week 4 — Scale & Reliability
+⬜ S3/R2 file storage (get off local disk)
+⬜ PostgreSQL migration (SQLite won't survive production)
+⬜ Rate limiting + API throttling (slowapi)
+⬜ Structured logging (structlog + correlation IDs)
+🟢 Week 5 — Intelligence Layer
+⬜ Cross-meeting contradiction detection
+⬜ Meeting series intelligence (recurring meeting trends)
+⬜ Sentiment + talk-time analysis per speaker
+⬜ Smart agenda generation from open action items
+🔵 Week 6 — Platform
+⬜ Team workspaces + RBAC (roles: admin/member/viewer)
+⬜ Webhooks (push events to user systems)
+⬜ Audit logs (who accessed what, when)
+⬜ GDPR tooling (delete, export, retention)
+⚫ Week 7 — Monetization Ready
+⬜ Stripe billing + subscription tiers
+⬜ Usage analytics dashboard
+⬜ Admin panel
+⬜ Docker Compose → Kubernetes manifests

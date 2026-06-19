@@ -3,6 +3,7 @@ Summly FastAPI Backend
 Phase 2 Complete with Meeting Intelligence Engine
 """
 
+import uuid
 import datetime
 from server.core.auth.dependencies import get_current_user, get_optional_user
 from server.core.auth.models import User
@@ -129,6 +130,18 @@ class YouTubeRequest(BaseModel):
 class ChatRequest(BaseModel):
     query: str
     meeting_id: int | None = None
+
+
+
+class AgentRequest(BaseModel):
+    """
+    Request body for the /agent/chat endpoint.
+ 
+    query      : the user's question in plain English
+    meeting_id : which meeting to answer about
+    """
+    query:      str
+    meeting_id: int
 
 
 # =====================================================
@@ -613,6 +626,150 @@ def chat_search(
     except Exception as e:
         logger.error(f"Cross-meeting chat failed: {e}")
         raise HTTPException(status_code=500, detail=f"Chat failed: {str(e)}")
+    
+
+
+
+
+
+
+
+@app.get("/chat/meeting/stream", tags=["Chat"])
+async def stream_chat_meeting(
+    query: str = Query(..., description="The question to ask about the meeting"),
+    meeting_id: int = Query(..., description="The ID of the meeting to query"),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Stream an answer about a single meeting using Server-Sent Events.
+ 
+    Returns tokens one by one as the LLM generates them.
+    The final event contains {"done": true, "sources": [...]} with citations.
+ 
+    Use this instead of POST /chat/meeting when you want the response
+    to appear word-by-word in the UI (much better user experience).
+ 
+    Example curl:
+        curl -N -H "Authorization: Bearer <token>" \\
+          "http://localhost:8000/chat/meeting/stream?query=What+were+the+decisions&meeting_id=1"
+    """
+    # Verify the meeting exists and belongs to this user
+    # (same auth check as the non-streaming endpoint)
+    meeting = get_meeting_by_id(meeting_id, user_id=current_user.id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+ 
+    # Lazy import — loads SentenceTransformer + ChromaDB on first call
+    from server.core.rag.chat import stream_chat_with_meeting
+ 
+    # StreamingResponse wraps our generator and sends each yielded string
+    # to the client as it's produced — no buffering.
+    #
+    # media_type="text/event-stream" is the MIME type for SSE.
+    # Without it, the browser would treat this as a regular text download
+    # instead of a live event stream.
+    #
+    # headers["Cache-Control"] = "no-cache" is required by the SSE spec.
+    # It tells browsers and proxies never to cache the stream.
+    #
+    # headers["X-Accel-Buffering"] = "no" disables Nginx buffering.
+    # Without this, Nginx would collect the whole response before sending it,
+    # completely defeating the purpose of streaming.
+    return StreamingResponse(
+        stream_chat_with_meeting(query=query, meeting_id=meeting_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control":   "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection":      "keep-alive",
+        },
+    )
+ 
+ 
+@app.get("/chat/search/stream", tags=["Chat"])
+async def stream_chat_search(
+    query: str = Query(..., description="The question to ask across all meetings"),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Stream an answer by searching across ALL meetings using Server-Sent Events.
+ 
+    Returns tokens one by one as the LLM generates them.
+    The final event contains {"done": true, "sources": [...]} with citations.
+ 
+    Example curl:
+        curl -N -H "Authorization: Bearer <token>" \\
+          "http://localhost:8000/chat/search/stream?query=What+decisions+were+made"
+    """
+    from server.core.rag.chat import stream_chat_across_meetings
+ 
+    return StreamingResponse(
+        stream_chat_across_meetings(query=query),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control":   "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection":      "keep-alive",
+        },
+    )
+ 
+
+
+ 
+ 
+# ── Add this endpoint after your /chat/search/stream endpoint ─────────────────
+ 
+@app.post("/agent/chat", tags=["Agent"])
+async def agent_chat(
+    request: AgentRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Tool-calling ReAct agent that answers questions about a meeting.
+ 
+    Unlike /chat/meeting (which always does RAG), this agent DECIDES which
+    tool(s) to use based on the question:
+ 
+      "What were the action items?"  → calls get_action_items()
+      "How did the meeting go?"      → calls get_health_score()
+      "What was decided about X?"    → calls get_decisions() and/or search_transcript()
+      "Give me a full recap"         → calls summarize_meeting() + get_action_items() + get_decisions()
+ 
+    The agent runs a ReAct loop: Think → Act (call tool) → Observe (read result) → repeat.
+    It stops when it has enough information to give a final answer.
+ 
+    Returns:
+        answer     : the agent's final answer
+        tools_used : which tools were called (useful for debugging)
+        iterations : how many reasoning steps it took
+        meeting_id : echoed back for convenience
+    """
+    # Verify the meeting exists and belongs to this user
+    # (same check as /chat/meeting — never let a user query another user's meeting)
+    meeting = get_meeting_by_id(request.meeting_id, user_id=current_user.id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+ 
+    try:
+        # Lazy import — avoids loading the agent module at startup
+        from server.core.agent.meeting_agent import run_agent
+ 
+        result = run_agent(
+            query=request.query,
+            meeting_id=request.meeting_id,
+        )
+ 
+        return {
+            "answer":     result["answer"],
+            "tools_used": result["tools_used"],
+            "iterations": result["iterations"],
+            "meeting_id": request.meeting_id,
+        }
+ 
+    except Exception as e:
+        logger.error(f"Agent failed for meeting {request.meeting_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Agent failed: {str(e)}")
+ 
 
 
 # =====================================================
@@ -924,6 +1081,154 @@ async def youtube_with_progress(
         intelligence    = get_intelligence_for_response(meeting_id),
         processing_time = processing_time,
     )
+
+
+
+
+@app.post("/upload/async", tags=["Processing"])
+async def upload_file_async(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    enable_audio_cleaning: bool = Query(default=True),
+):
+    """
+    Async upload endpoint — returns a job_id immediately, processes in background.
+ 
+    HOW THIS IS DIFFERENT FROM /upload/progress:
+        /upload/progress  → FastAPI processes the file itself (blocks until done)
+                            Browser must stay connected the whole time
+        /upload/async     → FastAPI saves the file and hands off to Celery (<1 second)
+                            Browser gets job_id immediately and can poll for progress
+                            Works even if the user closes the tab
+ 
+    WORKFLOW:
+        1. Client calls POST /upload/async with the file
+        2. FastAPI saves file to disk
+        3. FastAPI calls process_meeting_task.delay(...) → drops job into Redis
+        4. FastAPI returns {"job_id": "abc123", "status": "queued"} immediately
+        5. Celery worker (separate process) picks up the job and starts processing
+        6. Client polls GET /jobs/{job_id}/status to see progress
+        7. Client can also connect to ws://localhost:8000/ws/progress/{job_id}
+           to get live WebSocket updates (reuses your existing WebSocket system)
+ 
+    Returns:
+        job_id   : unique identifier for this job
+        status   : "queued"
+        filename : the uploaded file's name
+        message  : human-readable confirmation
+    """
+    ext = file.filename.split(".")[-1].lower()
+ 
+    VIDEO_EXTENSIONS = {"mp4", "mov", "avi", "mkv", "webm", "m4v"}
+    AUDIO_EXTENSIONS = {"mp3", "wav", "m4a", "ogg", "flac", "aac"}
+ 
+    if ext in VIDEO_EXTENSIONS:
+        file_path = VIDEO_DIR / file.filename
+    elif ext in AUDIO_EXTENSIONS:
+        file_path = AUDIO_DIR / file.filename
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type: .{ext}. Supported: mp4, mov, avi, mp3, wav, m4a"
+        )
+ 
+    # Save file to disk first — Celery worker will read it from here
+    try:
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
+ 
+    # Generate a unique job ID for this upload
+    # uuid4() generates a random UUID: e.g. "550e8400-e29b-41d4-a716-446655440000"
+    job_id = str(uuid.uuid4())
+ 
+    # Write initial "queued" status to Redis so /jobs/{job_id}/status works immediately
+    from server.core.tasks import set_job_status
+    set_job_status(job_id, {
+        "step":       "queued",
+        "message":    "Job queued — waiting for worker",
+        "pct":        0,
+        "meeting_id": None,
+        "error":      None,
+    })
+ 
+    # Drop the job into the Celery queue (returns immediately — does NOT block)
+    # .delay() is shorthand for .apply_async() with default options
+    from server.core.tasks import process_meeting_task
+    process_meeting_task.delay(
+        job_id=job_id,
+        file_path=str(file_path.resolve()),   # absolute path so worker can find it
+        filename=file.filename,
+        user_id=current_user.id,
+        enable_audio_cleaning=enable_audio_cleaning,
+    )
+ 
+    logger.info(f"Queued async job {job_id} for file {file.filename} (user {current_user.id})")
+ 
+    return {
+        "job_id":   job_id,
+        "status":   "queued",
+        "filename": file.filename,
+        "message":  "File uploaded. Processing started in background.",
+    }
+ 
+ 
+@app.get("/jobs/{job_id}/status", tags=["Processing"])
+async def get_job_status(
+    job_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Poll the status of a background processing job.
+ 
+    Call this repeatedly after POST /upload/async to check progress.
+    Typical polling interval: every 2-3 seconds.
+ 
+    Returns:
+        job_id     : the job ID you passed in
+        step       : current step name
+                     "queued"      → waiting in queue
+                     "extract"     → extracting audio
+                     "transcribe"  → running Whisper
+                     "intel"       → running LLM intelligence agents
+                     "index"       → indexing into ChromaDB
+                     "done"        → finished successfully
+                     "error"       → failed (see error field)
+        message    : human-readable description of current step
+        pct        : progress percentage 0-100
+        meeting_id : the new meeting's ID (only set when step == "done")
+        error      : error message (only set when step == "error")
+ 
+    Example polling loop in JavaScript:
+        const poll = async (jobId) => {
+            const res = await fetch(`/jobs/${jobId}/status`, { headers: { Authorization: `Bearer ${token}` } });
+            const data = await res.json();
+            console.log(`${data.pct}% — ${data.message}`);
+            if (data.step !== "done" && data.step !== "error") {
+                setTimeout(() => poll(jobId), 2000);  // poll every 2 seconds
+            }
+        };
+    """
+    from server.core.tasks import get_job_status as _get_status
+ 
+    status = _get_status(job_id)
+ 
+    if status is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Job '{job_id}' not found. It may have expired (jobs are kept for 1 hour)."
+        )
+ 
+    return {
+        "job_id":     job_id,
+        "step":       status.get("step"),
+        "message":    status.get("message"),
+        "pct":        status.get("pct", 0),
+        "meeting_id": status.get("meeting_id"),
+        "error":      status.get("error"),
+    }
+ 
 
 
 # =====================================================

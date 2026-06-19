@@ -1,0 +1,72 @@
+# Web framework
+fastapi==0.136.3
+uvicorn==0.48.0
+python-multipart==0.0.29
+starlette==1.2.0
+websockets==16.0
+
+# LLM / AI
+groq==0.37.1
+instructor==1.8.3
+openai==1.86.0
+
+# RAG / Vector Search
+chromadb==1.5.9
+sentence-transformers==5.5.1
+rank-bm25==0.2.2
+
+# PyTorch CPU-only — install BEFORE other packages
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.5.1+cpu
+torchvision==0.20.1+cpu
+
+# Transcription
+faster-whisper==1.2.1
+ctranslate2==4.7.2
+yt-dlp==2026.5.25.234532.dev0
+
+# Observability
+langfuse==2.59.3
+
+# Auth / Security
+python-jose==3.5.0
+passlib==1.7.4
+bcrypt==4.0.1
+
+# PDF Export
+reportlab==4.5.1
+
+# Utilities
+python-dotenv==1.2.2
+pydantic==2.13.4
+pydantic-settings==2.14.1
+httpx==0.28.1
+numpy==2.4.4
+scipy==1.17.1
+scikit-learn==1.8.0
+soundfile==0.13.1
+librosa==0.11.0
+pydub==0.25.1
+requests==2.34.2
+transformers==5.9.0
+tokenizers==0.22.2
+safetensors==0.8.0
+email-validator==2.2.0
+
+
+
+
+# # Start in background (free your terminal)
+# docker-compose up -d
+
+# # Watch logs anytime
+# docker-compose logs -f api
+
+# # Stop everything
+# docker-compose down
+
+# # Restart after code changes (no full rebuild)
+# docker-compose up --build
+
+# # Open shell inside container for debugging
+# docker-compose exec api bash
