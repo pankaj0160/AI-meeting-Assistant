@@ -257,3 +257,4 @@ pyannote.audio
 supabase==2.15.1
 
 psycopg2-binary==2.9.10
+slowapi==0.1.9

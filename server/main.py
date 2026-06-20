@@ -9,7 +9,7 @@ from server.core.auth.dependencies import get_current_user, get_optional_user
 from server.core.auth.models import User
 from typing import Optional
 from server.core.auth.router import router as auth_router
-from fastapi import Depends, FastAPI, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect, Query
+from fastapi import Depends, FastAPI, Request, UploadFile, File, HTTPException, WebSocket, WebSocketDisconnect, Query
 from fastapi import WebSocket, WebSocketDisconnect
 import asyncio
 from fastapi import FastAPI, UploadFile, File, HTTPException
@@ -21,6 +21,9 @@ import shutil
 import time
 import logging
 from server.core.storage import upload_file as upload_to_supabase
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 # ── Lazy-loaded at first use (heavy AI / ML deps) ──────────────────────────
 # from server.core.transcription.audio_extractor import extract_audio       # FFmpeg-heavy
@@ -90,6 +93,18 @@ app = FastAPI(
     version="2.0.0",
     description="AI Meeting Intelligence Platform Backend"
 )
+
+# get_remote_address is a function that extracts the caller's IP address
+# from the request. slowapi uses this to track "how many requests has
+# THIS IP made in the last minute?"
+#
+# app.state.limiter is how slowapi finds the limiter — it looks for it there.
+# The exception handler makes 429 errors return JSON instead of an HTML page.
+ 
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+ 
 
 
 @app.middleware("http")
@@ -445,10 +460,12 @@ def health():
 # =====================================================
 
 @app.post("/upload", response_model=TranscriptResponse, tags=["Processing"])
+@limiter.limit("10/minute")
 async def upload_file(
+    request: Request,           # ← ADD THIS as the first parameter
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
-    enable_audio_cleaning: bool = Query(default=True, description="Enable audio noise reduction and normalization"),
+    enable_audio_cleaning: bool = Query(default=True),
 ):
     """
     Upload and process an audio or video file.
@@ -684,10 +701,10 @@ def list_meetings(current_user: User = Depends(get_current_user)):
         records = get_all_transcripts(user_id=current_user.id)
         return [
             MeetingBasic(
-                id=row[0],
-                filename=row[1],
-                created_at=row[3],
-                duration_seconds=row[4]
+                id=row["id"],
+                filename=row["filename"],
+                created_at=str(row["created_at"]),
+                duration_seconds=row["duration_seconds"]
             )
             for row in records
         ]
@@ -760,8 +777,10 @@ def meeting_intelligence(
 # =====================================================
 
 @app.post("/chat/meeting", tags=["Chat"])
-def chat_meeting(
-    request: ChatRequest,
+@limiter.limit("30/minute")
+async def chat_with_meeting_endpoint(
+    request: Request,           # ← ADD THIS as the first parameter
+    body: ChatRequest,
     current_user: User = Depends(get_current_user),
 ):
     """
@@ -1136,8 +1155,10 @@ async def _run_with_progress(job_id: str, filename: str, transcript_fn, user_id:
 
 
 @app.post("/upload/progress", tags=["Processing"])
+@limiter.limit("10/minute")
 async def upload_file_with_progress(
-    file:   UploadFile = File(...),
+    request: Request,           # ← ADD THIS as the first parameter
+    file: UploadFile = File(...),
     job_id: str = Query(default=None),
     current_user: User = Depends(get_current_user),
     enable_audio_cleaning: bool = Query(default=True),

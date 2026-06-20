@@ -1,6 +1,8 @@
 # core/auth/router.py
 
-from fastapi import APIRouter, HTTPException, Depends, status
+from fastapi import APIRouter, HTTPException, Depends, status, Request
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from server.core.auth.schemas import (
     RegisterRequest, LoginRequest,
@@ -20,6 +22,8 @@ from server.core.auth.models import User
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
+limiter = Limiter(key_func=get_remote_address)
+
 
 def _to_public(user: User) -> UserPublic:
     return UserPublic(
@@ -35,11 +39,8 @@ def _to_public(user: User) -> UserPublic:
 # ── Register ───────────────────────────────────────────────────────────────────
 
 @router.post("/register", response_model=AuthResponse, status_code=201)
-def register(body: RegisterRequest):
-    """
-    Create a new account.
-    Returns JWT token + user object on success.
-    """
+@limiter.limit("5/minute")
+def register(request: Request, body: RegisterRequest):
     try:
         user = create_user(
             full_name=body.full_name,
@@ -59,7 +60,8 @@ def register(body: RegisterRequest):
 # ── Login ──────────────────────────────────────────────────────────────────────
 
 @router.post("/login", response_model=AuthResponse)
-def login(body: LoginRequest):
+@limiter.limit("5/minute")
+def login(request: Request, body: LoginRequest):
     print("LOGIN ROUTE HIT")
     try:
         print("LOGIN EMAIL:", body.email)
@@ -91,7 +93,6 @@ def login(body: LoginRequest):
 
 @router.get("/me", response_model=UserPublic)
 def me(current_user: User = Depends(get_current_user)):
-    """Return the currently authenticated user."""
     return _to_public(current_user)
 
 
@@ -113,7 +114,9 @@ def update_me(
 # ── Change password ────────────────────────────────────────────────────────────
 
 @router.put("/me/password", response_model=MessageResponse)
+@limiter.limit("5/minute")
 def change_password(
+    request: Request,
     body: ChangePasswordRequest,
     current_user: User = Depends(get_current_user),
 ):
@@ -129,21 +132,14 @@ def change_password(
 # ── Forgot password ────────────────────────────────────────────────────────────
 
 @router.post("/forgot-password", response_model=MessageResponse)
-def forgot_password(body: ForgotPasswordRequest):
-    """
-    Sends a reset token. Always returns 200 to prevent email enumeration.
-    In production, send this token via email.
-    For now, the token is returned in the response for testing.
-    """
+@limiter.limit("3/minute")
+def forgot_password(request: Request, body: ForgotPasswordRequest):
     token = create_reset_token(body.email)
 
-    # TODO Phase 4: send via SMTP/Resend
-    # For now return token directly (remove in production)
     if token:
         return MessageResponse(
             message=f"Reset token generated. Token: {token}"
         )
-    # Return same message even if email not found (security)
     return MessageResponse(
         message="If that email exists, a reset link has been sent."
     )
@@ -152,7 +148,8 @@ def forgot_password(body: ForgotPasswordRequest):
 # ── Reset password ─────────────────────────────────────────────────────────────
 
 @router.post("/reset-password", response_model=MessageResponse)
-def reset_password(body: ResetPasswordRequest):
+@limiter.limit("5/minute")
+def reset_password(request: Request, body: ResetPasswordRequest):
     success = consume_reset_token(body.token, body.new_password)
     if not success:
         raise HTTPException(
