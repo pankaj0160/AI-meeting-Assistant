@@ -40,6 +40,8 @@ jobs:
             structlog==24.4.0 \
             pytest==8.3.5 \
             pytest-asyncio
+            rank_bm25==0.2.2 \
+            
 
       - name: Run pytest
         run: python -m pytest server/tests/ -v
