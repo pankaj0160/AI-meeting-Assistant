@@ -250,3 +250,10 @@ redis==5.2.1
 # Visit http://localhost:5555 after docker-compose up.
 # Optional — delete this line if you don't want the monitoring dashboard.
 flower==2.0.1
+
+
+pyannote.audio
+
+supabase==2.15.1
+
+psycopg2-binary==2.9.10
