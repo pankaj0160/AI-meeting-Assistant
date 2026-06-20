@@ -20,6 +20,7 @@ from pydantic import BaseModel, HttpUrl
 import shutil
 import time
 import logging
+from server.core.storage import upload_file as upload_to_supabase
 
 # ── Lazy-loaded at first use (heavy AI / ML deps) ──────────────────────────
 # from server.core.transcription.audio_extractor import extract_audio       # FFmpeg-heavy
@@ -37,6 +38,13 @@ from server.core.database import (
     save_meeting_intelligence,
     get_meeting_intelligence,
     get_meeting_by_id,
+    get_all_action_items,
+    get_action_items_by_meeting,
+    update_action_item_fields,
+    delete_action_item,
+    get_action_item_stats,
+    save_diarization,
+    get_diarization,
 )
 
 from server.core.intelligence.health  import analyze_meeting_health
@@ -142,6 +150,174 @@ class AgentRequest(BaseModel):
     """
     query:      str
     meeting_id: int
+
+
+
+
+
+class UpdateActionItemRequest(BaseModel):
+    """
+    Body for PATCH /tasks/{item_id}.
+    Every field is optional — only the ones you send will be updated.
+ 
+    Send just the owner:      {"owner": "Alice"}
+    Send just the status:     {"status": "done"}
+    Send multiple at once:    {"owner": "Bob", "deadline": "2024-03-01", "priority": "high"}
+    """
+    owner:    str | None = None
+    deadline: str | None = None
+    priority: str | None = None   # must be: high | medium | low
+    status:   str | None = None   # must be: open | in_progress | done | overdue
+ 
+ 
+# ── STEP 3: Paste these 5 endpoints after PUT /tasks/{item_id}/status ────────
+ 
+ 
+@app.get("/tasks", tags=["Action Items"])
+def get_all_tasks(
+    status:       str | None = Query(default=None),
+    priority:     str | None = Query(default=None),
+    owner:        str | None = Query(default=None),
+    current_user: User       = Depends(get_current_user),
+):
+    """
+    Get every action item across all meetings for the logged-in user.
+ 
+    Optional URL filters (combine freely):
+        ?status=open
+        ?priority=high
+        ?owner=Alice          (case-insensitive, partial match)
+        ?status=open&priority=high
+ 
+    Each item includes:
+        id           → use this to call PATCH /tasks/{id} or DELETE /tasks/{id}
+        task         → what needs to be done
+        owner        → who is responsible
+        deadline     → when it's due
+        priority     → high / medium / low
+        status       → open / in_progress / done / overdue
+        meeting_id   → which meeting it came from
+        filename     → the meeting's filename (e.g. "standup_jan15.mp4")
+        meeting_date → when that meeting was processed
+    """
+    items = get_all_action_items(user_id=current_user.id)
+ 
+    # Apply filters in Python — the list is small enough that this is fine
+    if status:
+        items = [i for i in items if i["status"] == status.lower()]
+    if priority:
+        items = [i for i in items if i["priority"] == priority.lower()]
+    if owner:
+        items = [i for i in items
+                 if i["owner"] and owner.lower() in i["owner"].lower()]
+ 
+    return {"total": len(items), "items": items}
+ 
+ 
+@app.get("/tasks/stats", tags=["Action Items"])
+def get_task_stats(current_user: User = Depends(get_current_user)):
+    """
+    Get action item counts grouped by status.
+ 
+    Returns:
+        {
+            "total": 25,
+            "open": 12,
+            "in_progress": 4,
+            "done": 8,
+            "overdue": 1
+        }
+ 
+    Use this for dashboard summary cards.
+    """
+    return get_action_item_stats(user_id=current_user.id)
+ 
+ 
+@app.get("/meetings/{meeting_id}/tasks", tags=["Action Items"])
+def get_meeting_tasks(
+    meeting_id:   int,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Get action items for ONE meeting, with each item's id included.
+ 
+    Why does this exist when /meetings/{id}/intelligence already returns action items?
+    Because that endpoint returns them WITHOUT the id field — so you can't
+    call PATCH /tasks/{id} on them. This endpoint includes the id.
+ 
+    Use this for the per-meeting task view in your UI.
+    """
+    meeting = get_meeting_by_id(meeting_id, user_id=current_user.id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+ 
+    items = get_action_items_by_meeting(meeting_id=meeting_id)
+ 
+    return {
+        "meeting_id": meeting_id,
+        "filename":   meeting["filename"],
+        "total":      len(items),
+        "items":      items,
+    }
+ 
+ 
+@app.patch("/tasks/{item_id}", tags=["Action Items"])
+def patch_action_item(
+    item_id:      int,
+    body:         UpdateActionItemRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Update any field(s) on an action item in one call.
+ 
+    This is more powerful than PUT /tasks/{item_id}/status which only
+    changes the status. This endpoint lets you change owner, deadline,
+    priority, and status — individually or all at once.
+ 
+    Only fields you include in the body are written. Omitted fields stay as-is.
+ 
+    Examples:
+        {"owner": "Alice"}                           → change owner only
+        {"status": "done"}                           → mark done only
+        {"owner": "Bob", "deadline": "2024-03-15"}   → two fields at once
+    """
+    try:
+        updated = update_action_item_fields(
+            item_id=item_id,
+            user_id=current_user.id,
+            owner=body.owner,
+            deadline=body.deadline,
+            priority=body.priority,
+            status=body.status,
+        )
+    except ValueError as e:
+        # update_action_item_fields raises ValueError for invalid priority/status values
+        raise HTTPException(status_code=400, detail=str(e))
+ 
+    if not updated:
+        raise HTTPException(status_code=404, detail="Action item not found or access denied")
+ 
+    return {"message": "Updated", "item_id": item_id}
+ 
+ 
+@app.delete("/tasks/{item_id}", tags=["Action Items"])
+def remove_action_item(
+    item_id:      int,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Permanently delete an action item.
+ 
+    Use this when the LLM extracted something that wasn't really a task.
+    The meeting transcript is not affected — only this item is removed.
+    There is no undo.
+    """
+    deleted = delete_action_item(item_id=item_id, user_id=current_user.id)
+ 
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Action item not found or access denied")
+ 
+    return {"message": "Deleted", "item_id": item_id}
 
 
 # =====================================================
@@ -295,12 +471,26 @@ async def upload_file(
         )
 
     try:
+        # Step 1: Save to local disk first (needed by FFmpeg/Whisper to process)
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-        logger.info(f"File saved: {file_path}")
+        logger.info(f"File saved locally: {file_path}")
+    
+        # Step 2: Upload to Supabase in the background
+        # The filename in Supabase includes the user ID as a folder prefix.
+        # Example: "user_5/standup.wav"
+        # This keeps each user's files separate in the bucket.
+        supabase_filename = f"user_{current_user.id}/{file.filename}"
+        file_url = upload_to_supabase(
+            local_path=str(file_path),
+            filename=supabase_filename,
+        )
+        logger.info(f"File uploaded to Supabase: {file_url}")
+    
     except Exception as e:
-        logger.error(f"File save failed: {e}")
+        logger.error(f"File save/upload failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to save file")
+    
 
     file_size = file_path.stat().st_size
     if file_size > MAX_FILE_SIZE:
@@ -967,11 +1157,22 @@ async def upload_file_with_progress(
     else:
         raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
 
+    
     try:
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
+    
+        supabase_filename = f"user_{current_user.id}/{file.filename}"
+        file_url = upload_to_supabase(
+            local_path=str(file_path),
+            filename=supabase_filename,
+        )
+        logger.info(f"File uploaded to Supabase: {file_url}")
+    
     except Exception as e:
+        logger.error(f"Upload failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to save file")
+    
 
     file_size_mb = round(file_path.stat().st_size / (1024 * 1024), 2)
 
@@ -1003,6 +1204,175 @@ async def upload_file_with_progress(
         processing_time = processing_time,
         file_size_mb    = file_size_mb,
     )
+
+
+ 
+# ── STEP 3: main.py additions ─────────────────────────────────────────────────
+ 
+# 3a. Add to the database import block at top of main.py:
+#       save_diarization,
+#       get_diarization,
+ 
+# 3b. Paste these two endpoints after your existing /upload/progress endpoint
+ 
+ 
+@app.post("/meetings/{meeting_id}/diarize", tags=["Transcription"])
+async def diarize_meeting(
+    meeting_id:   int,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Run speaker diarization on a meeting that's already been transcribed.
+ 
+    This is a separate step from transcription — run it after a meeting
+    has been uploaded and processed.
+ 
+    What you need first:
+        1. pip install pyannote.audio
+        2. Accept terms at huggingface.co/pyannote/speaker-diarization-3.1
+        3. Accept terms at huggingface.co/pyannote/segmentation-3.0
+        4. HF_TOKEN set in your .env
+ 
+    What happens:
+        - Downloads the pyannote model if this is the first run (~1.5GB, cached after)
+        - Runs speaker detection on the original audio file
+        - Merges speaker labels with the existing Whisper transcript
+        - Saves the labelled transcript + talk time stats to SQLite
+ 
+    If you call this twice for the same meeting, it uses the cached result.
+ 
+    Returns:
+        transcript   : speaker-labelled transcript (SPEAKER_XX [m:ss]: text)
+        talk_time    : dict of per-speaker seconds and percentages
+        num_speakers : how many distinct speakers were found
+        cached       : true if this is a stored result, false if freshly computed
+    """
+    meeting = get_meeting_by_id(meeting_id, user_id=current_user.id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+ 
+    if not meeting.get("transcript"):
+        raise HTTPException(
+            status_code=400,
+            detail="This meeting has no transcript yet. Upload and process it first.",
+        )
+ 
+    # Return cached result if we've already run diarization on this meeting
+    cached = get_diarization(meeting_id)
+    if cached:
+        logger.info(f"Returning cached diarization for meeting {meeting_id}")
+        return {
+            "meeting_id":   meeting_id,
+            "transcript":   cached["transcript"],
+            "talk_time":    cached["talk_time"],
+            "num_speakers": cached["num_speakers"],
+            "cached":       True,
+        }
+ 
+    # Find the audio file on disk
+    # We need the original .wav file — same one transcribe_audio() used
+    from pathlib import Path
+    filename = meeting["filename"]
+    stem     = Path(filename).stem
+ 
+    candidates = [
+        AUDIO_DIR / f"{stem}.wav",
+        AUDIO_DIR / filename,
+        VIDEO_DIR / filename,
+    ]
+    audio_path = next((str(p) for p in candidates if p.exists()), None)
+ 
+    if not audio_path:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Audio file not found for meeting {meeting_id}. "
+                f"Looked in: {[str(p) for p in candidates]}"
+            ),
+        )
+ 
+    try:
+        from server.core.transcription.speaker_diarization import run_diarization
+ 
+        # Build a pseudo-segment list from the plain transcript.
+        # Ideal: re-run Whisper with return_timestamps=True to get real word timestamps.
+        # For now: treat the whole transcript as one big segment, let pyannote
+        # handle the speaker boundaries. This gives correct speaker detection
+        # even without word-level timestamps.
+        pseudo_segments = [{
+            "start": 0.0,
+            "end":   9999.0,
+            "text":  meeting["transcript"],
+        }]
+ 
+        # Run in a thread — pyannote is CPU-heavy and would block the event loop
+        result = await asyncio.to_thread(
+            run_diarization,
+            audio_path=audio_path,
+            whisper_segments=pseudo_segments,
+        )
+ 
+        # Save to database
+        save_diarization(
+            meeting_id=meeting_id,
+            transcript=result["transcript"],
+            talk_time=result["talk_time"],
+            num_speakers=result["num_speakers"],
+        )
+ 
+        return {
+            "meeting_id":   meeting_id,
+            "transcript":   result["transcript"],
+            "talk_time":    result["talk_time"],
+            "num_speakers": result["num_speakers"],
+            "cached":       False,
+        }
+ 
+    except RuntimeError as e:
+        # HF_TOKEN missing or model terms not accepted
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Diarization failed for meeting {meeting_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Diarization failed: {str(e)}")
+ 
+ 
+@app.get("/meetings/{meeting_id}/diarization", tags=["Transcription"])
+def get_diarization_result(
+    meeting_id:   int,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Fetch stored diarization results for a meeting.
+ 
+    Returns 404 if diarization hasn't been run yet.
+    Run POST /meetings/{id}/diarize first.
+ 
+    Returns:
+        transcript   : speaker-labelled transcript
+        talk_time    : per-speaker seconds and percentages
+        num_speakers : how many speakers were detected
+    """
+    meeting = get_meeting_by_id(meeting_id, user_id=current_user.id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+ 
+    result = get_diarization(meeting_id)
+    if not result:
+        raise HTTPException(
+            status_code=404,
+            detail="No diarization found. Run POST /meetings/{id}/diarize first.",
+        )
+ 
+    return {
+        "meeting_id":   meeting_id,
+        "transcript":   result["transcript"],
+        "talk_time":    result["talk_time"],
+        "num_speakers": result["num_speakers"],
+    }
+
+
+
+
 
 
 @app.post("/youtube/progress", tags=["Processing"])
