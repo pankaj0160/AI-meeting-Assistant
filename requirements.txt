@@ -198,7 +198,7 @@ openai==1.86.0              # Required by instructor as a dependency
 
 # ── RAG / Vector Search ───────────────────────────────────────────────────────
 chromadb==1.5.9             # Vector database — stores and searches transcript embeddings
-sentence-transformers==3.0.1# Converts text to vectors for ChromaDB (all-MiniLM-L6-v2)
+sentence-transformers==3.0.1 # Converts text to vectors for ChromaDB (all-MiniLM-L6-v2)
 rank-bm25==0.2.2            # BM25 keyword search — the "B" in hybrid BM25+vector search
 torch==2.4.1              # Required by sentence-transformers (deep learning backend)
 transformers==4.44.2        # HuggingFace model loading — used by sentence-transformers

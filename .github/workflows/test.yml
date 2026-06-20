@@ -18,10 +18,28 @@ jobs:
           python-version: "3.12"
           cache: "pip"
 
-      - name: Install dependencies
+      - name: Install test dependencies
         run: |
-          pip install -r requirements.txt
-          pip install pytest pytest-asyncio
+          pip install \
+            fastapi==0.136.3 \
+            uvicorn==0.48.0 \
+            python-multipart==0.0.29 \
+            pydantic==2.13.4 \
+            pydantic-settings==2.14.1 \
+            python-dotenv==1.2.2 \
+            python-jose==3.5.0 \
+            passlib==1.7.4 \
+            bcrypt==4.0.1 \
+            groq==0.37.1 \
+            instructor==1.8.3 \
+            openai==1.86.0 \
+            langfuse==2.59.3 \
+            httpx==0.28.1 \
+            psycopg2-binary==2.9.10 \
+            slowapi==0.1.9 \
+            structlog==24.4.0 \
+            pytest==8.3.5 \
+            pytest-asyncio
 
       - name: Run pytest
         run: python -m pytest server/tests/ -v
@@ -30,3 +48,4 @@ jobs:
           LANGFUSE_PUBLIC_KEY: "fake-key-for-testing"
           LANGFUSE_SECRET_KEY: "fake-key-for-testing"
           LANGFUSE_HOST: "https://cloud.langfuse.com"
+          DATABASE_URL: "postgresql://fake:fake@localhost:5432/fake"
