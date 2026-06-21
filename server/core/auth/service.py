@@ -73,10 +73,10 @@ def _row_to_user(row: dict) -> User:
         full_name=     row["full_name"],
         email=         row["email"],
         password_hash= row["password_hash"],
-        profile_image= row["profile_image"],
+        profile_image= row.get("profile_image"),
         created_at=    str(row["created_at"]),
         updated_at=    str(row["updated_at"]),
-        last_login=    str(row["last_login"]) if row["last_login"] else None,
+        last_login=    str(row["last_login"]) if row.get("last_login") else None,
     )
 
 
@@ -179,8 +179,11 @@ def create_reset_token(email: str) -> Optional[str]:
         cur = conn.cursor()
         cur.execute("DELETE FROM password_reset_tokens WHERE user_id = %s", (user.id,))
         cur.execute(
-            "INSERT INTO password_reset_tokens (user_id, token, expires_at) VALUES (%s, %s, %s)",
-            (user.id, token, expires),
+            """
+            INSERT INTO password_reset_tokens (user_id, token, expires_at)
+            VALUES (%s, %s, NOW() + INTERVAL '1 hour')
+            """,
+            (user.id, token),
         )
     return token
 
@@ -195,7 +198,7 @@ def consume_reset_token(token: str, new_password: str) -> bool:
             return False
 
         # expires_at comes back as a real datetime from PostgreSQL (no fromisoformat needed)
-        if datetime.datetime.utcnow() > row["expires_at"].replace(tzinfo=None):
+        if datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc) > row["expires_at"]:
             cur.execute("DELETE FROM password_reset_tokens WHERE token = %s", (token,))
             return False
 

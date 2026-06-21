@@ -67,6 +67,28 @@ from server.core.database import (
     get_meeting_title,
     update_action_item_status,
     get_all_meetings_for_indexing,
+    # ── Week 5: Workspaces ──────────────────────────────
+    create_workspace,
+    get_workspaces_for_user,
+    get_workspace_by_id,
+    update_workspace,
+    delete_workspace,
+    add_meeting_to_workspace,
+    remove_meeting_from_workspace,
+    get_meetings_in_workspace,
+    get_workspace_for_meeting,
+    # ── Week 6 ──────────────────────────────────────
+    get_workspace_members,
+    invite_member_to_workspace,
+    remove_member_from_workspace,
+    create_webhook,
+    get_webhooks_for_user,
+    delete_webhook,
+    get_webhook_events,
+    write_audit_log,
+    get_audit_logs,
+    export_user_data,
+    delete_user_data,
 )
 
 from server.core.intelligence.health   import analyze_meeting_health
@@ -198,6 +220,40 @@ class UpdateActionItemRequest(BaseModel):
     deadline: str | None = None
     priority: str | None = None   # high | medium | low
     status:   str | None = None   # open | in_progress | done | overdue
+
+
+
+class InviteMemberRequest(BaseModel):
+    email: str
+    role:  str = "member"
+
+
+class CreateWebhookRequest(BaseModel):
+    url:    str
+    events: list[str]
+
+
+class DeleteAccountRequest(BaseModel):
+    confirm: str
+
+
+class AuditLogFilter(BaseModel):
+    resource_type: str | None = None
+    resource_id:   int | None = None
+    limit:         int        = 100
+
+
+class CreateWorkspaceRequest(BaseModel):
+    name:        str
+    description: str = ""
+    type:        str = "individual"   # "individual" or "project"
+    color:       str = "#6366f1"
+
+
+class UpdateWorkspaceRequest(BaseModel):
+    name:        str | None = None
+    description: str | None = None
+    color:       str | None = None
 
 
 class IntelligenceResponse(BaseModel):
@@ -417,8 +473,697 @@ def remove_action_item(
     deleted = delete_action_item(item_id=item_id, user_id=current_user.id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Action item not found or access denied")
+    
+    write_audit_log(user_id=current_user.id, resource_type="task", resource_id=item_id, action="deleted")
 
     return {"message": "Deleted", "item_id": item_id}
+
+
+
+
+# =====================================================
+# WORKSPACE ENDPOINTS
+# =====================================================
+
+@app.post("/workspaces", tags=["Workspaces"])
+def create_workspace_endpoint(
+    body:         CreateWorkspaceRequest,
+    current_user: User = Depends(get_current_user),
+):
+    if body.type not in {"individual", "project"}:
+        raise HTTPException(status_code=400, detail="type must be 'individual' or 'project'")
+
+    return create_workspace(
+        owner_id    = current_user.id,
+        name        = body.name,
+        description = body.description,
+        type        = body.type,
+        color       = body.color,
+    )
+
+
+@app.get("/workspaces", tags=["Workspaces"])
+def list_workspaces(current_user: User = Depends(get_current_user)):
+    return get_workspaces_for_user(user_id=current_user.id)
+
+
+@app.get("/workspaces/{workspace_id}", tags=["Workspaces"])
+def get_workspace(
+    workspace_id: int,
+    current_user: User = Depends(get_current_user),
+):
+    workspace = get_workspace_by_id(workspace_id, user_id=current_user.id)
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    return workspace
+
+
+@app.patch("/workspaces/{workspace_id}", tags=["Workspaces"])
+def patch_workspace(
+    workspace_id: int,
+    body:         UpdateWorkspaceRequest,
+    current_user: User = Depends(get_current_user),
+):
+    updated = update_workspace(
+        workspace_id = workspace_id,
+        owner_id     = current_user.id,
+        name         = body.name,
+        description  = body.description,
+        color        = body.color,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Workspace not found or access denied")
+    return {"message": "Workspace updated"}
+
+
+@app.delete("/workspaces/{workspace_id}", tags=["Workspaces"])
+def delete_workspace_endpoint(
+    workspace_id: int,
+    current_user: User = Depends(get_current_user),
+):
+    deleted = delete_workspace(workspace_id=workspace_id, owner_id=current_user.id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Workspace not found or access denied")
+    return {"message": "Workspace deleted"}
+
+
+@app.get("/workspaces/{workspace_id}/meetings", tags=["Workspaces"])
+def list_workspace_meetings(
+    workspace_id: int,
+    current_user: User = Depends(get_current_user),
+):
+    workspace = get_workspace_by_id(workspace_id, user_id=current_user.id)
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    meetings = get_meetings_in_workspace(workspace_id=workspace_id, user_id=current_user.id)
+    return {
+        "workspace_id":   workspace_id,
+        "workspace_name": workspace["name"],
+        "total":          len(meetings),
+        "meetings":       meetings,
+    }
+
+
+@app.post("/workspaces/{workspace_id}/meetings/{meeting_id}", tags=["Workspaces"])
+def add_meeting_to_workspace_endpoint(
+    workspace_id: int,
+    meeting_id:   int,
+    current_user: User = Depends(get_current_user),
+):
+    added = add_meeting_to_workspace(
+        workspace_id = workspace_id,
+        meeting_id   = meeting_id,
+        user_id      = current_user.id,
+    )
+    if not added:
+        raise HTTPException(status_code=404, detail="Workspace or meeting not found, or access denied")
+    return {"message": "Meeting added to workspace", "workspace_id": workspace_id, "meeting_id": meeting_id}
+
+
+@app.delete("/workspaces/{workspace_id}/meetings/{meeting_id}", tags=["Workspaces"])
+def remove_meeting_from_workspace_endpoint(
+    workspace_id: int,
+    meeting_id:   int,
+    current_user: User = Depends(get_current_user),
+):
+    removed = remove_meeting_from_workspace(
+        workspace_id = workspace_id,
+        meeting_id   = meeting_id,
+        user_id      = current_user.id,
+    )
+    if not removed:
+        raise HTTPException(status_code=404, detail="Workspace not found or access denied")
+    return {"message": "Meeting removed from workspace"}
+
+
+
+# =====================================================
+# WORKSPACE INTELLIGENCE ENDPOINTS
+# =====================================================
+
+@app.get("/workspaces/{workspace_id}/intelligence", tags=["Workspaces"])
+async def workspace_intelligence(
+    workspace_id: int,
+    current_user: User = Depends(get_current_user),
+):
+    from server.core.intelligence.workspace_intel import get_workspace_summary
+
+    result = await asyncio.to_thread(
+        get_workspace_summary,
+        workspace_id = workspace_id,
+        user_id      = current_user.id,
+    )
+
+    if result is None:
+        raise HTTPException(status_code=404, detail="Workspace not found or access denied")
+
+    return result
+
+
+@app.get("/workspaces/{workspace_id}/tasks", tags=["Workspaces"])
+def workspace_tasks(
+    workspace_id: int,
+    status:       str | None = Query(default=None, description="Filter: open / in_progress / done / overdue"),
+    current_user: User = Depends(get_current_user),
+):
+    from server.core.intelligence.workspace_intel import get_workspace_action_items
+
+    result = get_workspace_action_items(workspace_id=workspace_id, user_id=current_user.id)
+
+    if result is None:
+        raise HTTPException(status_code=404, detail="Workspace not found or access denied")
+
+    if status:
+        result["items"] = [i for i in result["items"] if i.get("status") == status.lower()]
+        result["total"] = len(result["items"])
+
+    return result
+
+
+@app.post("/workspaces/{workspace_id}/chat", tags=["Workspaces"])
+async def workspace_chat(
+    workspace_id: int,
+    body:         ChatRequest,
+    current_user: User = Depends(get_current_user),
+):
+    workspace = get_workspace_by_id(workspace_id, user_id=current_user.id)
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace not found or access denied")
+
+    meetings = get_meetings_in_workspace(workspace_id=workspace_id, user_id=current_user.id)
+
+    if not meetings:
+        return {
+            "answer":         "This workspace has no meetings yet. Add meetings to this workspace first.",
+            "sources":        [],
+            "meeting_count":  0,
+            "workspace_id":   workspace_id,
+        }
+
+    meeting_ids = [m["id"] for m in meetings]
+
+    from server.core.rag.hybrid_search import hybrid_search
+    from server.core.rag.chat import get_groq_client, MODEL
+
+    all_chunks = []
+    for mid in meeting_ids:
+        chunks = hybrid_search(query=body.query, meeting_id=mid, top_k=3)
+        all_chunks.extend(chunks)
+
+    all_chunks.sort(key=lambda c: c.get("score", 0), reverse=True)
+    top_chunks = all_chunks[:8]
+
+    if not top_chunks:
+        return {
+            "answer":        "I could not find relevant information across this workspace's meetings.",
+            "sources":       [],
+            "meeting_count": len(meeting_ids),
+            "workspace_id":  workspace_id,
+        }
+
+    context_parts = []
+    for i, chunk in enumerate(top_chunks, 1):
+        mtg_name = next(
+            (m.get("ai_title") or m["filename"] for m in meetings if m["id"] == chunk.get("meeting_id")),
+            f"Meeting {chunk.get('meeting_id')}",
+        )
+        context_parts.append(f"[{i}] From '{mtg_name}':\n{chunk['text']}")
+
+    context = "\n\n".join(context_parts)
+
+    system = f"""You are an expert assistant for the project workspace "{workspace["name"]}".
+You answer questions using ONLY the meeting transcript context provided.
+Always mention which meeting the information came from.
+If the answer is not in the context, say so clearly."""
+
+    client   = get_groq_client()
+    response = client.chat.completions.create(
+        model       = MODEL,
+        messages    = [
+            {"role": "system", "content": system},
+            {"role": "user",   "content": f"Context:\n{context}\n\nQuestion: {body.query}"},
+        ],
+        temperature = 0.1,
+        max_tokens  = 1024,
+    )
+
+    return {
+        "answer":         response.choices[0].message.content.strip(),
+        "sources":        top_chunks,
+        "meeting_count":  len(meeting_ids),
+        "workspace_id":   workspace_id,
+        "workspace_name": workspace["name"],
+    }
+
+
+
+@app.get("/workspaces/{workspace_id}/agenda", tags=["Workspaces"])
+async def workspace_smart_agenda(
+    workspace_id: int,
+    current_user: User = Depends(get_current_user),
+):
+    workspace = get_workspace_by_id(workspace_id, user_id=current_user.id)
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace not found or access denied")
+
+    from server.core.intelligence.personalized import generate_smart_agenda
+
+    result = await asyncio.to_thread(
+        generate_smart_agenda,
+        workspace_id = workspace_id,
+        user_id      = current_user.id,
+    )
+
+    if result is None:
+        raise HTTPException(status_code=404, detail="Workspace not found or access denied")
+
+    return result
+
+
+@app.get("/workspaces/{workspace_id}/meetings/{meeting_id}/carry-forward", tags=["Workspaces"])
+def get_carry_forward(
+    workspace_id: int,
+    meeting_id:   int,
+    current_user: User = Depends(get_current_user),
+):
+    workspace = get_workspace_by_id(workspace_id, user_id=current_user.id)
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace not found or access denied")
+
+    meeting = get_meeting_by_id(meeting_id, user_id=current_user.id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    from server.core.intelligence.personalized import get_carry_forward_items
+
+    result = get_carry_forward_items(
+        workspace_id = workspace_id,
+        meeting_id   = meeting_id,
+        user_id      = current_user.id,
+    )
+
+    if result is None:
+        raise HTTPException(status_code=404, detail="Workspace not found or access denied")
+
+    return result
+
+
+@app.get("/workspaces/{workspace_id}/meetings/{meeting_id}/compare", tags=["Workspaces"])
+def compare_meeting_to_workspace(
+    workspace_id: int,
+    meeting_id:   int,
+    current_user: User = Depends(get_current_user),
+):
+    workspace = get_workspace_by_id(workspace_id, user_id=current_user.id)
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace not found or access denied")
+
+    meeting = get_meeting_by_id(meeting_id, user_id=current_user.id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    from server.core.intelligence.personalized import compare_meeting_health
+
+    result = compare_meeting_health(
+        workspace_id = workspace_id,
+        meeting_id   = meeting_id,
+        user_id      = current_user.id,
+    )
+
+    if result is None:
+        raise HTTPException(status_code=404, detail="Workspace not found or access denied")
+
+    return result
+
+
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WORKSPACE MEMBER MANAGEMENT (RBAC)
+# ─────────────────────────────────────────────────────────────────────────────
+ 
+@app.get("/workspaces/{workspace_id}/members", tags=["Workspaces"])
+def list_workspace_members(
+    workspace_id: int,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    List all members of a workspace and their roles.
+ 
+    Roles:
+        owner  → created the workspace, can invite/remove members, delete workspace
+        member → can view all meetings and add meetings to the workspace
+        viewer → read-only access, cannot add meetings or invite others
+ 
+    Returns 404 if you're not a member of this workspace.
+    """
+    members = get_workspace_members(workspace_id=workspace_id, user_id=current_user.id)
+    if members is None:
+        raise HTTPException(status_code=404, detail="Workspace not found or access denied")
+ 
+    return {
+        "workspace_id": workspace_id,
+        "total":        len(members),
+        "members":      members,
+    }
+ 
+ 
+@app.post("/workspaces/{workspace_id}/members", tags=["Workspaces"])
+async def invite_member(
+    workspace_id: int,
+    body:         InviteMemberRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Invite a user to a workspace by their email address.
+ 
+    Rules:
+        - Only workspace owners can invite
+        - The invitee must already have a Summly account
+        - Valid roles: 'member' or 'viewer' (cannot invite as 'owner')
+        - You cannot invite someone who is already a member
+ 
+    After a successful invite:
+        - The invited user immediately gains access (no email confirmation needed)
+        - They will see the workspace in their GET /workspaces list
+        - A webhook event "member.invited" fires if configured
+ 
+    Returns 400 with a clear reason message if the invite fails.
+    """
+    result = invite_member_to_workspace(
+        workspace_id=workspace_id,
+        inviter_id=current_user.id,
+        invitee_email=body.email,
+        role=body.role,
+    )
+ 
+    if not result["success"]:
+        raise HTTPException(status_code=400, detail=result["reason"])
+ 
+    # Write audit log
+    write_audit_log(
+        user_id=current_user.id,
+        resource_type="workspace",
+        resource_id=workspace_id,
+        action="member_invited",
+        metadata={"invitee_email": body.email, "role": body.role},
+    )
+ 
+    # Fire webhook event
+    from server.core.webhooks import fire_event
+    await fire_event(
+        user_id=current_user.id,
+        event_type="member.invited",
+        payload={
+            "workspace_id": workspace_id,
+            "invitee_email": body.email,
+            "invitee_name":  result.get("full_name"),
+            "role":          body.role,
+        },
+    )
+ 
+    return {
+        "message":  f"Successfully added {result['full_name']} as {body.role}",
+        "user_id":  result["user_id"],
+        "email":    result["email"],
+        "role":     body.role,
+    }
+ 
+ 
+@app.delete("/workspaces/{workspace_id}/members/{target_user_id}", tags=["Workspaces"])
+async def remove_member(
+    workspace_id:    int,
+    target_user_id:  int,
+    current_user:    User = Depends(get_current_user),
+):
+    """
+    Remove a member from a workspace.
+ 
+    Only the workspace owner can do this.
+    The owner cannot remove themselves — use DELETE /workspaces/{id} instead.
+    The removed user immediately loses access to the workspace.
+    Their meetings are not deleted — they just lose access to this workspace.
+    """
+    removed = remove_member_from_workspace(
+        workspace_id=workspace_id,
+        owner_id=current_user.id,
+        target_user_id=target_user_id,
+    )
+    if not removed:
+        raise HTTPException(
+            status_code=404,
+            detail="Workspace not found, you are not the owner, or cannot remove yourself"
+        )
+ 
+    write_audit_log(
+        user_id=current_user.id,
+        resource_type="workspace",
+        resource_id=workspace_id,
+        action="member_removed",
+        metadata={"removed_user_id": target_user_id},
+    )
+ 
+    from server.core.webhooks import fire_event
+    await fire_event(
+        user_id=current_user.id,
+        event_type="member.removed",
+        payload={"workspace_id": workspace_id, "removed_user_id": target_user_id},
+    )
+ 
+    return {"message": "Member removed from workspace"}
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# WEBHOOKS
+# ─────────────────────────────────────────────────────────────────────────────
+ 
+@app.post("/webhooks", tags=["Webhooks"])
+def create_webhook_endpoint(
+    body:         CreateWebhookRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Register a new webhook URL to receive event notifications.
+ 
+    When events happen in Summly, we will POST a JSON payload to your URL.
+ 
+    The response includes a 'secret' field — save this immediately.
+    We never show it again. Use it to verify incoming requests:
+ 
+        import hmac, hashlib
+        def verify(secret, body_bytes, signature_header):
+            expected = "sha256=" + hmac.new(
+                secret.encode(), body_bytes, hashlib.sha256
+            ).hexdigest()
+            return hmac.compare_digest(expected, signature_header)
+ 
+    Valid event types to subscribe to:
+        meeting.processed   → fires when a meeting finishes processing
+        task.updated        → fires when an action item changes
+        task.deleted        → fires when an action item is deleted
+        member.invited      → fires when someone joins a workspace
+        member.removed      → fires when someone is removed from a workspace
+        workspace.created   → fires when a workspace is created
+        workspace.deleted   → fires when a workspace is deleted
+ 
+    Returns the new webhook with its secret (shown once only).
+    """
+    valid_events = {
+        "meeting.processed", "task.updated", "task.deleted",
+        "member.invited", "member.removed",
+        "workspace.created", "workspace.deleted",
+    }
+ 
+    invalid = [e for e in body.events if e not in valid_events]
+    if invalid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid event types: {invalid}. Valid: {sorted(valid_events)}"
+        )
+ 
+    webhook = create_webhook(
+        user_id=current_user.id,
+        url=body.url,
+        events=body.events,
+    )
+ 
+    write_audit_log(
+        user_id=current_user.id,
+        resource_type="webhook",
+        resource_id=webhook["id"],
+        action="created",
+        metadata={"url": body.url, "events": body.events},
+    )
+ 
+    return webhook
+ 
+ 
+@app.get("/webhooks", tags=["Webhooks"])
+def list_webhooks(current_user: User = Depends(get_current_user)):
+    """
+    List all webhook endpoints you have registered.
+    Secrets are not returned here for security.
+    Use GET /webhooks/{id}/events to see delivery history.
+    """
+    return get_webhooks_for_user(user_id=current_user.id)
+ 
+ 
+@app.delete("/webhooks/{webhook_id}", tags=["Webhooks"])
+def remove_webhook(
+    webhook_id:   int,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Delete a webhook endpoint.
+    All delivery history for this webhook is also deleted.
+    """
+    deleted = delete_webhook(webhook_id=webhook_id, user_id=current_user.id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Webhook not found")
+ 
+    write_audit_log(
+        user_id=current_user.id,
+        resource_type="webhook",
+        resource_id=webhook_id,
+        action="deleted",
+    )
+ 
+    return {"message": "Webhook deleted"}
+ 
+ 
+@app.get("/webhooks/{webhook_id}/events", tags=["Webhooks"])
+def list_webhook_events(
+    webhook_id:   int,
+    limit:        int  = Query(default=50, le=200),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Get delivery history for a webhook endpoint.
+ 
+    Shows the last N attempts (default 50, max 200), most recent first.
+    Each entry shows: event_type, status_code, success, error_message, delivered_at.
+ 
+    Use this to debug failed webhooks — you can see exactly what went wrong.
+    """
+    events = get_webhook_events(
+        webhook_id=webhook_id,
+        user_id=current_user.id,
+        limit=limit,
+    )
+    return {"webhook_id": webhook_id, "total": len(events), "events": events}
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# AUDIT LOGS
+# ─────────────────────────────────────────────────────────────────────────────
+ 
+@app.get("/audit-logs", tags=["Audit"])
+def get_my_audit_logs(
+    resource_type: str | None = Query(default=None),
+    resource_id:   int | None = Query(default=None),
+    limit:         int        = Query(default=100, le=500),
+    current_user:  User       = Depends(get_current_user),
+):
+    """
+    View your own audit log — a complete history of everything you've done.
+ 
+    Optional filters:
+        ?resource_type=meeting     → only meeting events
+        ?resource_type=workspace   → only workspace events
+        ?resource_id=5             → only events for resource with id=5
+        ?resource_type=meeting&resource_id=5  → history of meeting 5
+ 
+    Each entry shows:
+        resource_type, resource_id, action, metadata, created_at
+ 
+    This log is append-only — entries are never edited or deleted.
+    """
+    logs = get_audit_logs(
+        user_id=current_user.id,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        limit=limit,
+    )
+    return {"total": len(logs), "logs": logs}
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# GDPR — DATA EXPORT AND ACCOUNT DELETION
+# ─────────────────────────────────────────────────────────────────────────────
+ 
+@app.get("/me/export", tags=["GDPR"])
+def export_my_data(current_user: User = Depends(get_current_user)):
+    """
+    Export all your data as a JSON file.
+ 
+    Required by GDPR Article 20 (Right to data portability).
+ 
+    Returns a JSON object containing:
+        user         → your profile
+        meetings     → all meeting metadata (not full transcripts — too large)
+        action_items → all tasks across all meetings
+        workspaces   → workspaces you own
+        audit_history → everything you've done in Summly
+ 
+    The response is sent as a downloadable file (Content-Disposition: attachment).
+    """
+    data = export_user_data(user_id=current_user.id)
+ 
+    write_audit_log(
+        user_id=current_user.id,
+        resource_type="user",
+        resource_id=current_user.id,
+        action="data_exported",
+    )
+ 
+    # Return as a downloadable JSON file
+    import json as _json
+    content = _json.dumps(data, indent=2, default=str)
+ 
+    return StreamingResponse(
+        iter([content]),
+        media_type="application/json",
+        headers={
+            "Content-Disposition": f"attachment; filename=summly_export_{current_user.id}.json"
+        },
+    )
+ 
+ 
+@app.delete("/me/account", tags=["GDPR"])
+def delete_my_account(
+    body:         DeleteAccountRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Permanently delete your account and all associated data.
+ 
+    Required by GDPR Article 17 (Right to erasure).
+ 
+    IMPORTANT: This is irreversible. Everything is deleted:
+        - Your profile
+        - All meetings, transcripts, and intelligence
+        - All action items, decisions, topics
+        - All workspaces you own
+        - All audit logs
+ 
+    To confirm, you must send:
+        {"confirm": "DELETE MY ACCOUNT"}
+ 
+    After deletion your JWT token will no longer work.
+    """
+    if body.confirm != "DELETE MY ACCOUNT":
+        raise HTTPException(
+            status_code=400,
+            detail='To confirm account deletion, send {"confirm": "DELETE MY ACCOUNT"}'
+        )
+ 
+    deleted = delete_user_data(user_id=current_user.id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="User not found")
+ 
+    return {"message": "Your account and all data have been permanently deleted."}
+ 
 
 
 # =====================================================
@@ -621,6 +1366,8 @@ def export_pdf(
     meeting = get_meeting_by_id(meeting_id, user_id=current_user.id)
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
+    
+    write_audit_log(user_id=current_user.id, resource_type="meeting", resource_id=meeting_id, action="exported")
 
     intel    = get_meeting_intelligence(meeting_id)
     health   = get_meeting_health(meeting_id)
@@ -889,6 +1636,7 @@ async def upload_file(
         from server.core.intelligence.workflow import analyze_transcript
         intelligence = analyze_transcript(transcript)
         save_meeting_intelligence(meeting_id, intelligence)
+        write_audit_log(user_id=current_user.id, resource_type="meeting", resource_id=meeting_id, action="created", metadata={"filename": file.filename})
         slog.info("intelligence_saved", meeting_id=meeting_id,
                   actions=len(intelligence.action_items),
                   decisions=len(intelligence.decisions),
@@ -1394,6 +2142,178 @@ def get_diarization_result(
         "num_speakers": result["num_speakers"],
     }
 
+
+
+
+@app.post("/meetings/{meeting_id}/sentiment", tags=["Analysis"])
+async def analyze_meeting_sentiment(
+    meeting_id:   int,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Run sentiment + talk-time analysis on a meeting.
+ 
+    PREREQUISITE:
+        Diarization must be run first.
+        Call POST /meetings/{id}/diarize before this endpoint.
+        Without speaker labels, per-speaker sentiment is impossible.
+ 
+    WHAT THIS DOES:
+        1. Reads the diarized transcript from the database
+        2. Runs Instructor-based sentiment extraction — one entry per speaker
+        3. Analyses overall meeting tone, energy level, and tension
+        4. Adds participation labels (dominant / balanced / quiet) to talk-time data
+        5. Calculates a balance score (0-100, higher = more equal participation)
+        6. Saves everything to the database
+ 
+    FIRST CALL: runs the full analysis (~10-20 seconds, makes 2 LLM calls)
+    REPEAT CALLS: returns the cached result instantly (no LLM call)
+ 
+    To force a fresh analysis, call DELETE /meetings/{id}/sentiment first
+    (not implemented yet — re-run diarization to invalidate).
+ 
+    Returns:
+        meeting_id         : the meeting
+        num_speakers       : how many speakers were detected
+        overall_sentiment  : "positive" / "neutral" / "negative"
+        meeting_energy     : "high" / "medium" / "low"
+        tension_detected   : true if conflict or frustration was detected
+        sentiment_shift    : string describing mood change, or null
+        speaker_sentiments : list of per-speaker sentiment objects
+        talk_time          : talk-time breakdown with participation labels
+    """
+    # Verify meeting ownership
+    meeting = get_meeting_by_id(meeting_id, user_id=current_user.id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+ 
+    # Return cached result if it exists
+    cached = get_sentiment_analysis(meeting_id)
+    if cached:
+        return {**cached, "cached": True}
+ 
+    # Run the full analysis in a thread (LLM calls are blocking)
+    from server.core.intelligence.sentiment import run_full_analysis
+ 
+    result = await asyncio.to_thread(run_full_analysis, meeting_id=meeting_id)
+ 
+    if result is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Diarization has not been run for this meeting yet. "
+                "Call POST /meetings/{id}/diarize first, then retry."
+            ),
+        )
+ 
+    return {**result, "cached": False}
+ 
+ 
+@app.get("/meetings/{meeting_id}/sentiment", tags=["Analysis"])
+def get_meeting_sentiment(
+    meeting_id:   int,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Fetch stored sentiment analysis for a meeting.
+ 
+    Returns 404 if analysis hasn't been run yet.
+    Call POST /meetings/{id}/sentiment first.
+ 
+    This is a plain GET — no LLM calls, just a database read.
+    Use this to display the results after the POST has completed.
+    """
+    meeting = get_meeting_by_id(meeting_id, user_id=current_user.id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+ 
+    result = get_sentiment_analysis(meeting_id)
+    if not result:
+        raise HTTPException(
+            status_code=404,
+            detail="No sentiment analysis found. Run POST /meetings/{id}/sentiment first.",
+        )
+ 
+    return result
+ 
+
+
+
+@app.get("/meetings/{meeting_id}/agenda", tags=["Analysis"])
+async def generate_meeting_agenda(
+    meeting_id:   int,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Generate a smart agenda for the NEXT meeting after this one.
+ 
+    Works in two modes — detected automatically:
+ 
+    WORKSPACE MODE (if this meeting is in a project workspace):
+        Pulls open action items and recurring topics from ALL meetings
+        in the workspace. Gives the richest, most contextual agenda.
+        Example: "You have 8 open items across 4 meetings — here are
+                  the 5 most important things for next time."
+ 
+    STANDALONE MODE (if this meeting has no workspace):
+        Uses only this meeting's own open action items and topics.
+        Still useful — just based on less history.
+        Example: "You have 3 open items from this meeting — here's
+                  a suggested agenda to follow up on them."
+ 
+    REQUIRES:
+        The meeting must have intelligence generated.
+        Call GET /meetings/{id}/intelligence first if you haven't.
+ 
+    This endpoint makes ONE Groq LLM call (~3-5 seconds).
+    Results are NOT cached — each call generates a fresh agenda.
+    (Agendas are time-sensitive — cached ones go stale fast.)
+ 
+    Returns:
+        meeting_id      : the meeting this agenda is based on
+        mode            : "workspace" or "standalone"
+        workspace_name  : name of the workspace (if mode is "workspace"), else null
+        agenda_items    : list of 4-6 items, each with title, reason, priority
+        context_source  : description of what data was used to generate this
+        open_items_used : how many open action items were fed into the prompt
+        topics_used     : how many unique topics were fed into the prompt
+ 
+    Example agenda_items:
+        [
+            {
+                "title":    "Q4 pricing decision",
+                "reason":   "Discussed in 2 meetings, no final number confirmed",
+                "priority": "high"
+            },
+            {
+                "title":    "Deploy status update — Alice",
+                "reason":   "Open action item, deadline was last Friday",
+                "priority": "high"
+            },
+            {
+                "title":    "Retrospective on sprint 14",
+                "reason":   "Recurring topic across past 3 meetings",
+                "priority": "medium"
+            }
+        ]
+    """
+    # Verify the meeting belongs to this user
+    meeting = get_meeting_by_id(meeting_id, user_id=current_user.id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+ 
+    from server.core.intelligence.agenda import generate_agenda_for_meeting
+ 
+    result = await asyncio.to_thread(
+        generate_agenda_for_meeting,
+        meeting_id=meeting_id,
+        user_id=current_user.id,
+    )
+ 
+    if result is None:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+ 
+    return result
 
 # =====================================================
 # ASYNC CELERY UPLOAD
