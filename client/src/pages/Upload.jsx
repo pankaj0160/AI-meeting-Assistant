@@ -9,7 +9,10 @@ import {
 import { useTheme } from '../ThemeContext'
 import { useUploadProgress, STEPS } from '../hooks/useUploadProgress'
 import { PageHeader, Card, Button, Divider } from '../components/ui'
-import { getToken } from '../api/client'
+import { getToken, getApiBase } from '../api/client'
+// FIX: getApiBase() imported from the single source of truth in api/client.js.
+// Old code had: const API_BASE = '...' || 'http://localhost:8000'
+// That hardcoded localhost pointed to the developer's own machine in production.
 
 const AUDIO_EXTS = ['mp3', 'wav', 'm4a', 'aac', 'flac']
 const VIDEO_EXTS = ['mp4', 'mkv', 'avi', 'mov', 'webm']
@@ -91,9 +94,6 @@ function ProgressOverlay({ pct, step, message, T }) {
   )
 }
 
-const API_BASE =
-  import.meta.env.VITE_API_URL ||
-  'http://localhost:8000'
 // ── Main ───────────────────────────────────────────────────────────────────────
 export default function Upload() {
   const { T }    = useTheme()
@@ -129,7 +129,7 @@ export default function Upload() {
       const token = getToken()
       const form  = new FormData()
       form.append('file', file)
-      const res = await fetch(`${API_BASE}/upload/progress?job_id=${jobId}`, {
+      const res = await fetch(`${getApiBase()}/upload/progress?job_id=${jobId}`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` },
         body: form,
@@ -148,7 +148,7 @@ export default function Upload() {
     try {
       const jobId = await prog.start()
       const token = getToken()
-      const res = await fetch(`${API_BASE}/youtube/progress?job_id=${jobId}`, {
+      const res = await fetch(`${getApiBase()}/youtube/progress?job_id=${jobId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ url: ytUrl.trim(), job_id: jobId }),

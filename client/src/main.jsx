@@ -6,13 +6,38 @@ import './index.css'
 import App from './App'
 import { ThemeProvider } from './ThemeContext'
 import { AuthProvider } from './context/AuthContext'
+import ErrorBoundary from './components/ErrorBoundary'
+import { ToastProvider } from './components/Toast'
+
+// FIX: Wrap the entire app in an ErrorBoundary.
+//
+// Without this: any unhandled error in any component crashes the whole
+// app to a blank white page with no message. User is completely stuck.
+//
+// With this: if something truly catastrophic happens at the root level
+// (e.g. AuthContext itself crashes), the user sees a friendly error screen
+// with a "Reload page" button instead of a white void.
+//
+// This is the LAST RESORT boundary — it catches anything that slips
+// through the page-level boundaries in App.jsx.
+//
+// showHome=false because at this level the whole app is broken,
+// navigating "home" won't help — only a full reload will.
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
-    <ThemeProvider>
-      <AuthProvider>
-        <App />
-      </AuthProvider>
-    </ThemeProvider>
+    <ErrorBoundary
+      fallbackTitle="Summly ran into a problem"
+      fallbackMessage="Something unexpected happened. Reloading the page usually fixes this."
+      showHome={false}
+    >
+      <ThemeProvider>
+        <AuthProvider>
+          <ToastProvider>
+            <App />
+          </ToastProvider>
+        </AuthProvider>
+      </ThemeProvider>
+    </ErrorBoundary>
   </StrictMode>
 )

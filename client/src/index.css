@@ -1,3 +1,9 @@
+/* ─────────────────────────────────────────────
+   index.css — Summly global styles
+   Phase 3 upgrade: richer animations, page
+   transitions, glass utility, premium scrollbar
+───────────────────────────────────────────── */
+
 *, *::before, *::after {
   box-sizing: border-box;
   margin: 0;
@@ -5,13 +11,24 @@
 }
 
 :root {
-  --font: 'Inter', system-ui, -apple-system, sans-serif;
+  --font:       'Inter', system-ui, -apple-system, sans-serif;
   --radius-sm:  6px;
   --radius-md:  12px;
   --radius-lg:  18px;
   --radius-xl:  24px;
-  --ease:       cubic-bezier(0.4, 0, 0.2, 1);
-  --speed:      0.18s;
+
+  /* easing curves — used consistently everywhere */
+  --ease:        cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-out:    cubic-bezier(0, 0, 0.2, 1);
+
+  /* speed tokens — change one value to speed up or slow down everything */
+  --speed-fast:   0.12s;
+  --speed:        0.18s;
+  --speed-slow:   0.28s;
+
+  /* transition shorthand used on every interactive element */
+  --transition: var(--speed) var(--ease);
 }
 
 html { font-size: 16px; }
@@ -21,29 +38,47 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   min-height: 100vh;
-  transition: background var(--speed) var(--ease),
-              color var(--speed) var(--ease);
+  transition:
+    background var(--speed) var(--ease),
+    color      var(--speed) var(--ease);
 }
 
 a { text-decoration: none; color: inherit; }
 button { font-family: var(--font); }
-input, textarea { font-family: var(--font); }
+input, textarea, select { font-family: var(--font); }
 
-/* ── Scrollbar ── */
-::-webkit-scrollbar { width: 4px; height: 4px; }
+/* ── Premium scrollbar ───────────────────────── */
+::-webkit-scrollbar       { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
   border-radius: 99px;
-  background: rgba(120, 120, 180, 0.25);
+  background: rgba(120, 120, 200, 0.20);
+  transition: background 0.2s;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(120, 120, 180, 0.45);
+  background: rgba(120, 120, 200, 0.42);
 }
 
-/* ── Animations ── */
+/* ── Focus ring — accessible, styled ────────── */
+:focus-visible {
+  outline: 2px solid var(--accent, #6366f1);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ──────────────────────────────────────────────
+   KEYFRAME ANIMATIONS
+   Naming: verb-direction (fadeUp, slideRight)
+────────────────────────────────────────────── */
+
 @keyframes fadeUp {
-  from { opacity: 0; transform: translateY(16px); }
-  to   { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; transform: translateY(18px); }
+  to   { opacity: 1; transform: translateY(0);    }
+}
+
+@keyframes fadeDown {
+  from { opacity: 0; transform: translateY(-12px); }
+  to   { opacity: 1; transform: translateY(0);     }
 }
 
 @keyframes fadeIn {
@@ -51,54 +86,160 @@ input, textarea { font-family: var(--font); }
   to   { opacity: 1; }
 }
 
-@keyframes shimmer {
-  0%   { background-position: -600px 0; }
-  100% { background-position: 600px 0; }
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.94); }
+  to   { opacity: 1; transform: scale(1);    }
 }
 
+@keyframes scaleInSpring {
+  from { opacity: 0; transform: scale(0.88); }
+  to   { opacity: 1; transform: scale(1);    }
+}
+
+@keyframes slideRight {
+  from { opacity: 0; transform: translateX(-16px); }
+  to   { opacity: 1; transform: translateX(0);     }
+}
+
+@keyframes slideLeft {
+  from { opacity: 0; transform: translateX(16px); }
+  to   { opacity: 1; transform: translateX(0);    }
+}
+
+/* Toast slide-in from the right */
+@keyframes toastIn {
+  from { opacity: 0; transform: translateX(110%); }
+  to   { opacity: 1; transform: translateX(0);    }
+}
+
+@keyframes toastOut {
+  from { opacity: 1; transform: translateX(0);    }
+  to   { opacity: 0; transform: translateX(110%); }
+}
+
+/* Skeleton shimmer */
+@keyframes shimmer {
+  0%   { background-position: -600px 0; }
+  100% { background-position:  600px 0; }
+}
+
+/* Spinner */
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
 
-.anim-fade-up {
-  animation: fadeUp 0.38s var(--ease) both;
+/* Count-up number pulse — subtle scale on each tick */
+@keyframes countPulse {
+  0%   { transform: scale(1);    }
+  40%  { transform: scale(1.06); }
+  100% { transform: scale(1);    }
 }
+
+/* SVG ring fill */
+@keyframes ringFill {
+  from { stroke-dashoffset: var(--ring-circumference, 226); }
+  to   { stroke-dashoffset: var(--ring-target, 0);          }
+}
+
+/* Ambient glow pulse */
+@keyframes glowPulse {
+  0%, 100% { opacity: 0.4; transform: scale(1);    }
+  50%       { opacity: 0.7; transform: scale(1.12); }
+}
+
+/* ── Animation utility classes ───────────────── */
+.anim-fade-up     { animation: fadeUp      0.42s var(--ease)        both; }
+.anim-fade-down   { animation: fadeDown    0.35s var(--ease)        both; }
+.anim-fade-in     { animation: fadeIn      0.30s var(--ease)        both; }
+.anim-scale-in    { animation: scaleIn     0.32s var(--ease)        both; }
+.anim-scale-spring{ animation: scaleInSpring 0.42s var(--ease-spring) both; }
+.anim-slide-r     { animation: slideRight  0.36s var(--ease)        both; }
+.anim-slide-l     { animation: slideLeft   0.36s var(--ease)        both; }
+
+/* Stagger delays — apply to list children */
 .anim-fade-up-1 { animation-delay: 0.06s; }
 .anim-fade-up-2 { animation-delay: 0.12s; }
 .anim-fade-up-3 { animation-delay: 0.18s; }
 .anim-fade-up-4 { animation-delay: 0.24s; }
 .anim-fade-up-5 { animation-delay: 0.30s; }
+.anim-fade-up-6 { animation-delay: 0.36s; }
 
-.anim-fade-in { animation: fadeIn 0.3s var(--ease) both; }
-
-/* ── Skeleton ── */
+/* ── Skeleton shimmer ────────────────────────── */
 .skeleton {
   border-radius: var(--radius-md);
   background: linear-gradient(
     90deg,
-    var(--skeleton-base) 25%,
+    var(--skeleton-base)  25%,
     var(--skeleton-shine) 50%,
-    var(--skeleton-base) 75%
+    var(--skeleton-base)  75%
   );
   background-size: 600px 100%;
-  animation: shimmer 1.4s infinite linear;
+  animation: shimmer 1.5s infinite linear;
 }
 
-/* ── Spinner ── */
+/* ── Spinner ─────────────────────────────────── */
 .spinner {
+  display: inline-block;
   width: 18px; height: 18px;
   border: 2px solid currentColor;
   border-top-color: transparent;
   border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-  display: inline-block;
+  animation: spin 0.65s linear infinite;
 }
 
-/* ── Gradient text — works reliably across theme switches ── */
+/* ── Gradient text ───────────────────────────── */
 .gradient-text {
-  background: linear-gradient(135deg, #6366f1, #a78bfa);
+  background: linear-gradient(135deg, #6366f1 0%, #a78bfa 50%, #06b6d4 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
   display: inline-block;
+}
+
+/* ── Glass morphism utility ──────────────────────
+   Usage: add class="glass" to any element
+   Creates frosted-glass effect (dark theme).
+   backdrop-filter: blur() blurs what is BEHIND
+   the element — creates depth layering.
+   Note: only works when element has some transparency.
+────────────────────────────────────────────── */
+.glass {
+  backdrop-filter: blur(12px) saturate(1.4);
+  -webkit-backdrop-filter: blur(12px) saturate(1.4);
+}
+
+/* ── Page transition wrapper ─────────────────────
+   Wrap page content in <div className="page-enter">
+   for smooth entrance on every navigation.
+────────────────────────────────────────────── */
+.page-enter {
+  animation: fadeUp 0.38s var(--ease) both;
+}
+
+/* ── Interactive press effect ────────────────────
+   Add to buttons/cards for physical click feel.
+────────────────────────────────────────────── */
+.press:active {
+  transform: scale(0.97) !important;
+  transition: transform 0.08s var(--ease) !important;
+}
+
+/* ── Truncate text utilities ─────────────────── */
+.truncate {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.truncate-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ── Ring animation helper ───────────────────── */
+.ring-animate {
+  animation: ringFill 1.2s var(--ease-out) forwards;
+  animation-delay: 0.3s;
 }

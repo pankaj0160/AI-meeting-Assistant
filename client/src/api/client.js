@@ -1,7 +1,28 @@
 // client/src/api/client.js
 
-const BASE =
-  import.meta.env.VITE_API_URL || '/api'
+// FIX: Single source of truth for the API base URL.
+//
+// Before this fix, Upload.jsx had its own copy:
+//   const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+//
+// That hardcoded 'http://localhost:8000' fallback pointed to the developer's
+// own machine. In production, users were calling localhost — their own computer
+// — which has no server running. File uploads silently failed.
+//
+// Fix: export getApiBase() from here so every file uses the same value.
+// The fallback '/api' is a relative URL — it works on any domain automatically.
+//
+// HOW TO CONFIGURE:
+//   Development (default): VITE_API_URL not set → uses '/api'
+//   If your dev backend runs on a different port, set in .env.local:
+//     VITE_API_URL=http://localhost:8000
+//   Production: leave VITE_API_URL unset → '/api' resolves to your domain.
+
+export function getApiBase() {
+  return import.meta.env.VITE_API_URL || '/api'
+}
+
+const BASE = getApiBase()
 
 // ── Token management ──────────────────────────────────────────────────────────
 
@@ -106,8 +127,23 @@ export async function apiResetPassword(token, new_password) {
 
 // ── Meetings ──────────────────────────────────────────────────────────────────
 
-export async function getMeetings() {
-  return request('/meetings')
+// FIX: getMeetings now accepts pagination params.
+// cursor = id of the last meeting you already have (undefined for first page)
+// limit  = how many to load per page (default 20)
+export async function getMeetings({ cursor, limit = 20 } = {}) {
+  const params = new URLSearchParams({ limit })
+  if (cursor) params.set('cursor', cursor)
+  return request(`/meetings?${params}`)
+}
+
+// FIX: getTasks now accepts pagination and filter params.
+export async function getTasks({ cursor, limit = 20, status, priority, owner } = {}) {
+  const params = new URLSearchParams({ limit })
+  if (cursor)   params.set('cursor',   cursor)
+  if (status)   params.set('status',   status)
+  if (priority) params.set('priority', priority)
+  if (owner)    params.set('owner',    owner)
+  return request(`/tasks?${params}`)
 }
 
 export async function getMeeting(id) {

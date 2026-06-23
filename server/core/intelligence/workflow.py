@@ -1,3 +1,6 @@
+# core/intelligence/workflow.py
+
+import logging
 from typing import TypedDict
 
 from langgraph.graph import StateGraph, END
@@ -15,8 +18,11 @@ from server.core.intelligence.schemas import (
     Topic,
 )
 
+# FIX: use proper logger instead of print()
+logger = logging.getLogger(__name__)
 
-# ─── Graph State ──────────────────────────────────────────────────────────────
+
+# ── Graph State ────────────────────────────────────────────────────────────────
 
 class IntelligenceState(TypedDict):
     transcript:   str
@@ -26,36 +32,66 @@ class IntelligenceState(TypedDict):
     topics:       list[Topic]
 
 
-# ─── Nodes ────────────────────────────────────────────────────────────────────
+# ── Nodes ──────────────────────────────────────────────────────────────────────
+#
+# FIX: Each node now has a try/except with a graceful fallback.
+#
+# Old code: if any agent failed, the whole graph crashed → meeting not saved.
+# New code: if an agent fails, log the error and continue with an empty result.
+#
+# This means a Groq timeout on "decisions" still gives the user their
+# summary, action items, and topics — not a total 500 error.
+# The failed agent returns [] (or fallback text) so the meeting is always saved.
 
 def _summary_node(state: IntelligenceState) -> IntelligenceState:
-    print("  → Running summary agent...")
-    summary = run_summary_agent(state["transcript"])
+    logger.info("Running summary agent")
+    try:
+        summary = run_summary_agent(state["transcript"])
+        logger.info("Summary agent complete (%d chars)", len(summary))
+    except Exception as e:
+        # FIX: graceful fallback — meeting still saves, user sees partial results
+        logger.error("Summary agent failed: %s", e, exc_info=True)
+        summary = "Summary unavailable — AI analysis encountered an error."
     return {**state, "summary": summary}
 
 
 def _action_items_node(state: IntelligenceState) -> IntelligenceState:
-    print("  → Running action items agent...")
-    items = run_action_item_agent(state["transcript"])
-    print(f"    Found {len(items)} action items")
+    logger.info("Running action items agent")
+    try:
+        items = run_action_item_agent(state["transcript"])
+        logger.info("Action items agent complete: found %d items", len(items))
+    except Exception as e:
+        # FIX: graceful fallback — empty list instead of crash
+        logger.error("Action items agent failed: %s", e, exc_info=True)
+        items = []
     return {**state, "action_items": items}
 
 
 def _decisions_node(state: IntelligenceState) -> IntelligenceState:
-    print("  → Running decisions agent...")
-    decisions = run_decision_agent(state["transcript"])
-    print(f"    Found {len(decisions)} decisions")
+    logger.info("Running decisions agent")
+    try:
+        decisions = run_decision_agent(state["transcript"])
+        logger.info("Decisions agent complete: found %d decisions", len(decisions))
+    except Exception as e:
+        # FIX: graceful fallback
+        logger.error("Decisions agent failed: %s", e, exc_info=True)
+        decisions = []
     return {**state, "decisions": decisions}
 
 
 def _topics_node(state: IntelligenceState) -> IntelligenceState:
-    print("  → Running topics agent...")
-    topics = run_topic_agent(state["transcript"])
-    print(f"    Found {len(topics)} topics")
+    logger.info("Running topics agent")
+    try:
+        topics = run_topic_agent(state["transcript"])
+        logger.info("Topics agent complete: found %d topics", len(topics))
+    except Exception as e:
+        # FIX: graceful fallback
+        logger.error("Topics agent failed: %s", e, exc_info=True)
+        topics = []
     return {**state, "topics": topics}
 
 
-# ─── Graph builder ────────────────────────────────────────────────────────────
+# ── Graph builder ──────────────────────────────────────────────────────────────
 
 def _build_graph() -> StateGraph:
     graph = StateGraph(IntelligenceState)
@@ -74,7 +110,7 @@ def _build_graph() -> StateGraph:
     return graph.compile()
 
 
-# ─── Public API ───────────────────────────────────────────────────────────────
+# ── Public API ─────────────────────────────────────────────────────────────────
 
 def analyze_transcript(transcript: str) -> MeetingIntelligence:
     """
@@ -82,10 +118,12 @@ def analyze_transcript(transcript: str) -> MeetingIntelligence:
 
     Takes a raw transcript string.
     Returns a fully populated MeetingIntelligence object.
-    Returns a safe empty result if transcript is too short.
+
+    Each agent has an individual fallback — one failure does not stop the rest.
+    Always returns a result, never raises an exception to the caller.
     """
     if not transcript or len(transcript.strip()) < 50:
-        print("  ⚠ Transcript too short to analyze.")
+        logger.warning("Transcript too short to analyze (%d chars)", len(transcript))
         return MeetingIntelligence(
             summary="Transcript too short to generate intelligence.",
             action_items=[],
@@ -93,6 +131,7 @@ def analyze_transcript(transcript: str) -> MeetingIntelligence:
             topics=[],
         )
 
+    logger.info("Starting intelligence analysis (%d chars)", len(transcript))
     graph = _build_graph()
 
     initial_state: IntelligenceState = {
@@ -105,9 +144,17 @@ def analyze_transcript(transcript: str) -> MeetingIntelligence:
 
     result = graph.invoke(initial_state)
 
+    logger.info(
+        "Intelligence analysis complete — summary: %s, actions: %d, decisions: %d, topics: %d",
+        "yes" if result["summary"] else "no",
+        len(result["action_items"]),
+        len(result["decisions"]),
+        len(result["topics"]),
+    )
+
     return MeetingIntelligence(
-        summary=result["summary"],
-        action_items=result["action_items"],
-        decisions=result["decisions"],
-        topics=result["topics"],
+        summary=      result["summary"],
+        action_items= result["action_items"],
+        decisions=    result["decisions"],
+        topics=       result["topics"],
     )

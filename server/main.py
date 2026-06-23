@@ -48,6 +48,9 @@ from server.core.storage import upload_file as upload_to_supabase
 from server.core.database import (
     init_db,
     get_all_transcripts,
+    get_user_stats,           # FIX: replaces N+1 stats loop
+    get_meetings_page,         # FIX: paginated meetings list
+    get_tasks_page,            # FIX: paginated tasks list
     save_transcript_and_get_id,
     save_meeting_intelligence,
     get_meeting_intelligence,
@@ -167,13 +170,43 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
+#
+# FIX: allow_origins=["*"] replaced with explicit allowed origins.
+#
+# allow_origins=["*"] means ANY website can call your API from a user's browser.
+# Combined with allow_credentials=True this is also a browser contradiction —
+# browsers refuse to send credentials to a wildcard origin, so some requests
+# were already silently failing.
+#
+# HOW TO CONFIGURE:
+#   In your .env file set:
+#     ALLOWED_ORIGINS=http://localhost:5173,https://yourapp.com
+#
+#   Development default (if not set): http://localhost:5173
+#   Production: set it to your real frontend domain only.
+#
+# WHY AN ENVIRONMENT VARIABLE?
+#   Your frontend URL is different in development vs production.
+#   Environment variables let you change it without touching code.
+
+_raw_origins = os.getenv(
+    "ALLOWED_ORIGINS",
+    "http://localhost:5173,http://localhost:3000"   # safe development default
+)
+
+# Split by comma, strip whitespace from each entry
+# e.g. "http://localhost:5173, https://summly.app" → two separate origins
+ALLOWED_ORIGINS: list[str] = [o.strip() for o in _raw_origins.split(",") if o.strip()]
+
+logger.info(f"CORS allowed origins: {ALLOWED_ORIGINS}")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    # FIX: explicit list instead of wildcard "*"
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-Request-ID"],
 )
 
 
@@ -365,32 +398,22 @@ def health_check():
 
 @app.get("/stats", tags=["System"])
 def get_stats(current_user: User = Depends(get_current_user)):
-    """Aggregate stats across all meetings for the logged-in user."""
+    """
+    Aggregate stats across all meetings for the logged-in user.
+
+    FIX: N+1 query problem removed.
+
+    Old code: fetched all meetings, then looped calling get_meeting_intelligence()
+    for every single meeting — 1 DB query + N queries (one per meeting).
+    With 50 meetings = 51 queries on every dashboard load.
+
+    New code: calls get_user_stats() which runs ONE SQL query using JOINs
+    and COUNT() to get all four numbers at once. Always 1 query, any scale.
+    """
     try:
-        meetings        = get_all_transcripts(user_id=current_user.id)
-        total_meetings  = len(meetings)
-        total_decisions = 0
-        total_actions   = 0
-        total_topics    = 0
-
-        for row in meetings:
-            try:
-                intel = get_meeting_intelligence(row["id"])
-                if intel:
-                    total_decisions += len(intel.get("decisions",    []))
-                    total_actions   += len(intel.get("action_items", []))
-                    total_topics    += len(intel.get("topics",       []))
-            except Exception:
-                pass
-
-        return {
-            "total_meetings":  total_meetings,
-            "total_decisions": total_decisions,
-            "total_actions":   total_actions,
-            "total_topics":    total_topics,
-        }
+        return get_user_stats(user_id=current_user.id)
     except Exception as e:
-        logger.error(f"Stats failed: {e}")
+        logger.error(f"Stats failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to fetch stats")
 
 
@@ -400,21 +423,44 @@ def get_stats(current_user: User = Depends(get_current_user)):
 
 @app.get("/tasks", tags=["Action Items"])
 def get_all_tasks(
+    current_user: User       = Depends(get_current_user),
+    limit:        int        = Query(default=20, ge=1, le=100),
+    cursor:       int | None = Query(default=None),
     status:       str | None = Query(default=None),
     priority:     str | None = Query(default=None),
     owner:        str | None = Query(default=None),
-    current_user: User       = Depends(get_current_user),
 ):
-    items = get_all_action_items(user_id=current_user.id)
+    """
+    FIX: Paginated tasks list — returns one page at a time.
 
-    if status:
-        items = [i for i in items if i["status"] == status.lower()]
-    if priority:
-        items = [i for i in items if i["priority"] == priority.lower()]
-    if owner:
-        items = [i for i in items if i["owner"] and owner.lower() in i["owner"].lower()]
+    Old: loaded ALL tasks for a user at once. With 500 tasks across
+    50 meetings, this was 500 rows in one response every time the
+    Tasks page opened.
 
-    return {"total": len(items), "items": items}
+    New: same cursor-based pagination as /meetings.
+    Filters (status, priority, owner) still work — applied in SQL,
+    not in Python after loading everything.
+
+    Response shape:
+      {
+        "items":       [...],   task objects with meeting_filename included
+        "has_more":    true,
+        "next_cursor": 38,
+        "count":       20
+      }
+    """
+    try:
+        return get_tasks_page(
+            user_id=current_user.id,
+            limit=limit,
+            cursor=cursor,
+            status=status,
+            priority=priority,
+            owner=owner,
+        )
+    except Exception as e:
+        logger.error(f"Failed to fetch tasks: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to fetch tasks")
 
 
 @app.get("/tasks/stats", tags=["Action Items"])
@@ -1170,21 +1216,41 @@ def delete_my_account(
 # MEETING ENDPOINTS
 # =====================================================
 
-@app.get("/meetings", response_model=list[MeetingBasic], tags=["Meetings"])
-def list_meetings(current_user: User = Depends(get_current_user)):
+@app.get("/meetings", tags=["Meetings"])
+def list_meetings(
+    current_user: User       = Depends(get_current_user),
+    limit:        int        = Query(default=20, ge=1, le=100),
+    cursor:       int | None = Query(default=None),
+):
+    """
+    FIX: Paginated meetings list — returns one page at a time.
+
+    Old: returned ALL meetings at once — 200 meetings = 200 rows in one response.
+    Browser had to render all 200 cards → laggy, freezes on low-end devices.
+
+    New: returns 20 at a time (configurable via ?limit=20).
+    Frontend sends ?cursor=<last_id> to get the next page.
+
+    Response shape:
+      {
+        "items":       [...],   20 meeting objects
+        "has_more":    true,    false when this is the last page
+        "next_cursor": 42,      pass as ?cursor=42 for next page
+        "count":       20       items in this response
+      }
+
+    Query params:
+      limit  = how many per page (1-100, default 20)
+      cursor = id of last item from previous page (omit for first page)
+    """
     try:
-        records = get_all_transcripts(user_id=current_user.id)
-        return [
-            MeetingBasic(
-                id               = row["id"],
-                filename         = row["filename"],
-                created_at       = str(row["created_at"]),
-                duration_seconds = row["duration_seconds"],
-            )
-            for row in records
-        ]
+        return get_meetings_page(
+            user_id=current_user.id,
+            limit=limit,
+            cursor=cursor,
+        )
     except Exception as e:
-        logger.error(f"Failed to fetch meetings: {e}")
+        logger.error(f"Failed to fetch meetings: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to fetch meetings")
 
 
@@ -1573,55 +1639,121 @@ async def upload_file(
     current_user:          User       = Depends(get_current_user),
     enable_audio_cleaning: bool       = Query(default=True),
 ):
+    """
+    Upload an audio/video file for transcription and AI analysis.
+
+    Flow:
+      1. Validate file type and stream into a temp file (size checked during streaming)
+      2. Upload original to Supabase Storage (permanent cloud copy)
+      3. Run FFmpeg + Whisper on the temp file
+      4. Run 6 AI agents on the transcript
+      5. Save everything to PostgreSQL
+      6. Delete temp file — guaranteed in finally block
+
+    No permanent local storage — temp file is the only local file,
+    and it is always deleted when the request finishes.
+    """
+    import uuid
+    import tempfile
+
     start_time = time.time()
     ext        = file.filename.split(".")[-1].lower()
 
-    if ext in VIDEO_EXTENSIONS:
-        file_path = VIDEO_DIR / file.filename
-    elif ext in AUDIO_EXTENSIONS:
-        file_path = AUDIO_DIR / file.filename
-    else:
+    if ext not in VIDEO_EXTENSIONS and ext not in AUDIO_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported file type: {ext}. Supported: {VIDEO_EXTENSIONS | AUDIO_EXTENSIONS}",
+            detail=(
+                f"Unsupported file type: .{ext}. "
+                f"Supported formats: mp3, wav, mp4, m4a, aac, flac, ogg, mkv, avi, mov, webm, m4v"
+            ),
         )
 
+    # Sanitise the original filename for use in paths + DB storage
+    # Strips dangerous characters like "../" that could escape the upload folder
+    safe_stem   = "".join(c for c in Path(file.filename).stem if c.isalnum() or c in "-_ ")[:50]
+    unique_name = f"{uuid.uuid4().hex[:8]}_{safe_stem}.{ext}"
+
+    # FIX: Use a system temp file instead of a permanent uploads/ directory.
+    #
+    # Old code wrote to: uploads/audio/user_42/filename.mp3 — stayed on disk forever.
+    # New code writes to: /tmp/summly_abc123.mp3 — deleted in the finally block below.
+    #
+    # tempfile.NamedTemporaryFile(delete=False) creates a file like /tmp/summly_xxxxx.ext
+    # We set delete=False because we close the file before Whisper/FFmpeg open it —
+    # if delete=True Python would delete it the moment we call .close(), before
+    # transcription can read it. We handle deletion ourselves in the finally block.
+    tmp_path = None
     try:
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-        slog.info("file_saved", filename=file.filename, path=str(file_path), user_id=current_user.id)
+        with tempfile.NamedTemporaryFile(
+            delete=False,
+            suffix=f".{ext}",
+            prefix="summly_"
+        ) as tmp:
+            tmp_path = Path(tmp.name)
 
-        supabase_filename = f"user_{current_user.id}/{file.filename}"
-        file_url = upload_to_supabase(local_path=str(file_path), filename=supabase_filename)
-        slog.info("file_uploaded_supabase", filename=file.filename, url=file_url, user_id=current_user.id)
+            # FIX: Stream file in 1MB chunks, reject immediately if too large.
+            # Old code: write entire file first, check size after — fills disk on large uploads.
+            # New code: count bytes while writing — stop and delete the moment limit is hit.
+            CHUNK_SIZE  = 1024 * 1024   # 1 MB
+            total_bytes = 0
 
-    except Exception as e:
-        slog.error("file_save_failed", filename=file.filename, error=str(e), user_id=current_user.id)
-        raise HTTPException(status_code=500, detail="Failed to save file")
+            while True:
+                chunk = await file.read(CHUNK_SIZE)
+                if not chunk:
+                    break
+                total_bytes += len(chunk)
+                if total_bytes > MAX_FILE_SIZE:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="File is too large. Maximum allowed size is 500 MB.",
+                    )
+                tmp.write(chunk)
 
-    file_size = file_path.stat().st_size
-    if file_size > MAX_FILE_SIZE:
-        file_path.unlink(missing_ok=True)
-        raise HTTPException(status_code=400, detail="File size exceeds 500 MB limit")
+        slog.info("temp_file_written",
+                  original_name=file.filename,
+                  size_mb=round(total_bytes / 1024 / 1024, 2),
+                  user_id=current_user.id)
 
-    file_size_mb = round(file_size / (1024 * 1024), 2)
+        # ── Step 1: Upload original to Supabase (permanent cloud copy) ─────
+        # This is done BEFORE transcription so that even if AI processing
+        # fails, the user's original file is already safely in the cloud.
+        ext_to_mime = {
+            "wav": "audio/wav",   "mp3": "audio/mpeg",  "m4a": "audio/mp4",
+            "aac": "audio/aac",   "flac": "audio/flac", "ogg": "audio/ogg",
+            "mp4": "video/mp4",   "mkv": "video/x-matroska",
+            "avi": "video/x-msvideo", "mov": "video/quicktime", "webm": "video/webm",
+        }
+        supabase_path = f"user_{current_user.id}/{unique_name}"
+        file_url = upload_to_supabase(
+            local_path=str(tmp_path),
+            filename=supabase_path,
+        )
+        slog.info("uploaded_to_supabase",
+                  path=supabase_path,
+                  url=file_url,
+                  user_id=current_user.id)
 
-    try:
+        # ── Step 2: Transcription (FFmpeg + Whisper) ───────────────────────
+        # FFmpeg and Whisper are C++ programs — they need a file path on disk.
+        # We pass them tmp_path which still exists at this point.
         from server.core.transcription.audio_extractor import extract_audio
 
         if ext in VIDEO_EXTENSIONS:
-            wav_file = extract_audio(str(file_path), enable_cleaning=enable_audio_cleaning)
+            # extract_audio runs FFmpeg: video → WAV
+            # It creates another temp file internally and returns its path
+            wav_file = extract_audio(str(tmp_path), enable_cleaning=enable_audio_cleaning)
         else:
-            wav_file = str(file_path)
+            wav_file = str(tmp_path)
             if enable_audio_cleaning:
                 try:
                     from server.core.transcription.audio_cleaner import AudioCleaner
                     cleaner = AudioCleaner(sr=16000)
-                    result  = cleaner.clean_audio(
+                    cleaner.clean_audio(
                         wav_file, output_path=wav_file,
-                        enable_noise_reduction=True, enable_compression=True, save_output=True,
+                        enable_noise_reduction=True,
+                        enable_compression=True,
+                        save_output=True,
                     )
-                    logger.info(f"✓ Audio cleaned — SNR improvement: {result['snr_improvement_db']:+.1f}dB")
                 except Exception as e:
                     logger.warning(f"Audio cleaning failed (non-fatal): {e}")
 
@@ -1629,52 +1761,80 @@ async def upload_file(
         transcript = transcribe_audio(wav_file)
         logger.info(f"Transcription complete: {len(transcript)} characters")
 
+        # ── Step 3: Save transcript to PostgreSQL ──────────────────────────
         meeting_id = save_transcript_and_get_id(
-            filename=file.filename, transcript=transcript, user_id=current_user.id,
+            filename=file.filename,
+            transcript=transcript,
+            user_id=current_user.id,
+            file_url=file_url,           # Supabase URL stored in DB for later download
         )
 
+        # ── Step 4: Run AI agents ──────────────────────────────────────────
         from server.core.intelligence.workflow import analyze_transcript
         intelligence = analyze_transcript(transcript)
         save_meeting_intelligence(meeting_id, intelligence)
-        write_audit_log(user_id=current_user.id, resource_type="meeting", resource_id=meeting_id, action="created", metadata={"filename": file.filename})
-        slog.info("intelligence_saved", meeting_id=meeting_id,
+
+        write_audit_log(
+            user_id=current_user.id,
+            resource_type="meeting",
+            resource_id=meeting_id,
+            action="created",
+            metadata={"filename": file.filename, "file_url": file_url},
+        )
+
+        slog.info("intelligence_saved",
+                  meeting_id=meeting_id,
                   actions=len(intelligence.action_items),
                   decisions=len(intelligence.decisions),
                   topics=len(intelligence.topics))
 
+        # ── Step 5: Index for RAG chat ─────────────────────────────────────
         try:
             from server.core.rag.indexer import index_meeting
-            index_meeting(meeting_id=meeting_id, filename=file.filename,
-                          transcript=transcript, created_at="")
+            index_meeting(
+                meeting_id=meeting_id,
+                filename=file.filename,
+                transcript=transcript,
+                created_at="",
+            )
         except Exception as e:
             logger.warning(f"ChromaDB indexing failed (non-fatal): {e}")
 
-        transcript_file = TRANSCRIPT_DIR / f"{Path(file.filename).stem}.txt"
-        transcript_file.write_text(transcript, encoding="utf-8")
-
         processing_time = round(time.time() - start_time, 2)
-        slog.info("upload_complete", filename=file.filename, meeting_id=meeting_id,
-                  processing_time=processing_time, user_id=current_user.id)
+        slog.info("upload_complete",
+                  filename=file.filename,
+                  meeting_id=meeting_id,
+                  processing_time=processing_time,
+                  user_id=current_user.id)
 
         return TranscriptResponse(
             meeting_id      = meeting_id,
             filename        = file.filename,
-            transcript_file = str(transcript_file),
+            transcript_file = supabase_path,   # Supabase path, not local path
             transcript      = transcript,
             intelligence    = get_intelligence_for_response(meeting_id),
             processing_time = processing_time,
-            file_size_mb    = file_size_mb,
+            file_size_mb    = round(total_bytes / 1024 / 1024, 2),
         )
 
+    except HTTPException:
+        raise   # pass our clean 400/403 errors through unchanged
+
     except Exception as e:
-        logger.error(f"Processing failed: {e}", exc_info=True)
-        file_path.unlink(missing_ok=True)
-        raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
+        logger.error(f"Upload processing failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Processing failed. Please try again.",
+        )
 
+    finally:
+        # FIX: Always delete the temp file — whether processing succeeded or failed.
+        # "finally" runs no matter what: success, exception, even HTTPException.
+        # This is the key guarantee: temp file NEVER stays on disk after this request.
+        if tmp_path and tmp_path.exists():
+            tmp_path.unlink()
+            slog.info("temp_file_deleted", path=str(tmp_path), user_id=current_user.id)
 
-# =====================================================
-# YOUTUBE ENDPOINT
-# =====================================================
 
 @app.post("/youtube", response_model=YouTubeResponse, tags=["Processing"])
 async def process_youtube(

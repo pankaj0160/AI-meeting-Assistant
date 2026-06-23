@@ -1,6 +1,8 @@
 # core/intelligence/agents.py
+
 import os
 import time
+import logging
 
 from groq import Groq
 from dotenv import load_dotenv
@@ -14,29 +16,72 @@ from server.core.intelligence.schemas import (
 
 load_dotenv()
 
+# FIX: use proper logger instead of print()
+logger = logging.getLogger(__name__)
+
 MODEL = "llama-3.3-70b-versatile"
 
-# ── Groq client (plain, for summary agent) ───────────────────────────────────
+# FIX: Transcript length cap.
+#
+# Groq's llama-3.3-70b supports 128k tokens but very long transcripts
+# make responses slow, expensive, and sometimes fail entirely.
+# 48,000 characters ≈ 12,000 words ≈ 60 minutes of speech — enough for
+# any normal meeting. Longer meetings get the first 60 minutes analysed.
+MAX_TRANSCRIPT_CHARS = 48_000
+
+
+def _cap_transcript(transcript: str) -> str:
+    """
+    Trim transcript to MAX_TRANSCRIPT_CHARS if needed.
+    Adds a note so the AI knows the text was trimmed.
+    """
+    if len(transcript) <= MAX_TRANSCRIPT_CHARS:
+        return transcript
+    trimmed = transcript[:MAX_TRANSCRIPT_CHARS]
+    logger.warning(
+        "Transcript trimmed from %d to %d chars for LLM analysis",
+        len(transcript), MAX_TRANSCRIPT_CHARS,
+    )
+    return (
+        trimmed
+        + "\n\n[NOTE: Transcript was trimmed to the first ~60 minutes for analysis.]"
+    )
+
+
+# ── Groq clients ──────────────────────────────────────────────────────────────
+#
+# We create two clients:
+#   _groq_client       — plain text responses (summary agent)
+#   _instructor_client — structured Pydantic responses (all other agents)
+#
+# Both are created once at module load and reused for every call.
+# Creating a new client per call would add overhead and waste connections.
+
 _groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-# ── Instructor-patched Groq client (for structured extraction agents) ─────────
-# instructor.from_groq() wraps the Groq client with structured output support.
-# Use _instructor_client when you want a Pydantic model back.
-# Use _groq_client when you want plain text back (summary agent).
 _instructor_client = instructor.from_groq(
     Groq(api_key=os.getenv("GROQ_API_KEY")),
-    mode=instructor.Mode.JSON,   # Groq works best in JSON mode
+    mode=instructor.Mode.JSON,
 )
 
-# ── Langfuse client ───────────────────────────────────────────────────────────
 _langfuse = Langfuse()
 
+# FIX: Timeout constant — applied to every single Groq API call.
+#
+# Without a timeout, a slow Groq response hangs the worker thread forever.
+# 4 concurrent uploads = 4 frozen threads = server appears completely down.
+#
+# 60 seconds is generous — normal Groq responses take 3–15 seconds.
+# If it takes longer than 60s something is wrong and we should give up,
+# log the error, and return a graceful fallback to the user.
+LLM_TIMEOUT_SECONDS = 60.0
 
-# ─── Shared plain-text Groq caller (summary only) ────────────────────────────
+
+# ── Shared plain-text caller ──────────────────────────────────────────────────
 
 def _call_groq(system_prompt: str, user_content: str, span_name: str = "groq-call") -> str:
     """
-    Plain text Groq caller — used only by the summary agent.
+    Plain text Groq caller — used by the summary agent.
     Returns raw string. Traced with Langfuse.
     """
     generation = _langfuse.generation(
@@ -51,6 +96,10 @@ def _call_groq(system_prompt: str, user_content: str, span_name: str = "groq-cal
     start_time = time.time()
 
     try:
+        # FIX: timeout=LLM_TIMEOUT_SECONDS added.
+        # Old code had no timeout — could hang the worker thread forever.
+        # Now if Groq takes longer than 60s, httpx raises a Timeout exception.
+        # The worker thread is freed, other users are unaffected.
         response = _groq_client.chat.completions.create(
             model=MODEL,
             messages=[
@@ -59,9 +108,10 @@ def _call_groq(system_prompt: str, user_content: str, span_name: str = "groq-cal
             ],
             temperature=0.1,
             max_tokens=2048,
+            timeout=LLM_TIMEOUT_SECONDS,   # FIX: added
         )
 
-        result = response.choices[0].message.content.strip()
+        result  = response.choices[0].message.content.strip()
         elapsed = time.time() - start_time
 
         generation.end(
@@ -81,7 +131,7 @@ def _call_groq(system_prompt: str, user_content: str, span_name: str = "groq-cal
         raise
 
 
-# ─── Shared Instructor caller (extraction agents) ────────────────────────────
+# ── Shared Instructor caller ──────────────────────────────────────────────────
 
 def _extract_structured(
     system_prompt: str,
@@ -91,10 +141,7 @@ def _extract_structured(
 ):
     """
     Instructor-based structured extractor.
-    Returns a validated Pydantic object — always, no exceptions for bad JSON.
-
-    response_model: the Pydantic class to extract into (e.g. ActionItemList)
-    span_name: label shown in Langfuse dashboard
+    Returns a validated Pydantic object — always matches the schema.
     """
     generation = _langfuse.generation(
         name=span_name,
@@ -109,9 +156,7 @@ def _extract_structured(
     start_time = time.time()
 
     try:
-        # This is the Instructor magic line.
-        # response_model= tells Instructor what Pydantic class to return.
-        # Groq is forced to match the schema — no preamble, no extra text.
+        # FIX: timeout=LLM_TIMEOUT_SECONDS added to instructor call too.
         result = _instructor_client.chat.completions.create(
             model=MODEL,
             response_model=response_model,
@@ -121,7 +166,8 @@ def _extract_structured(
             ],
             temperature=0.1,
             max_tokens=2048,
-            max_retries=3,   # Instructor auto-retries if validation fails
+            max_retries=3,
+            timeout=LLM_TIMEOUT_SECONDS,   # FIX: added
         )
 
         elapsed = time.time() - start_time
@@ -138,8 +184,7 @@ def _extract_structured(
         raise
 
 
-# ─── Agent 1: Summary ────────────────────────────────────────────────────────
-# Summary returns plain text — no JSON needed — so we keep using _call_groq.
+# ── Agent 1: Summary ──────────────────────────────────────────────────────────
 
 def run_summary_agent(transcript: str) -> str:
     system = """You are an expert meeting analyst.
@@ -152,11 +197,11 @@ Rules:
 - Do NOT list action items or decisions here
 - Return ONLY the summary text, no labels, no headings"""
 
-    return _call_groq(system, f"TRANSCRIPT:\n{transcript}", span_name="summary_agent")
+    # FIX: cap transcript before sending
+    return _call_groq(system, f"TRANSCRIPT:\n{_cap_transcript(transcript)}", span_name="summary_agent")
 
 
-# ─── Agent 2: Action Items ───────────────────────────────────────────────────
-# NOW uses Instructor — returns list[ActionItem], always valid, never crashes.
+# ── Agent 2: Action Items ─────────────────────────────────────────────────────
 
 def run_action_item_agent(transcript: str) -> list[ActionItem]:
     system = """You are an expert meeting analyst.
@@ -172,15 +217,14 @@ Extract every action item mentioned, even implicit ones."""
 
     result = _extract_structured(
         system_prompt=system,
-        user_content=f"TRANSCRIPT:\n{transcript}",
-        response_model=ActionItemList,   # ← returns ActionItemList object
+        user_content=f"TRANSCRIPT:\n{_cap_transcript(transcript)}",
+        response_model=ActionItemList,
         span_name="action_item_agent",
     )
+    return result.items
 
-    return result.items   # ← list[ActionItem], always valid
 
-
-# ─── Agent 3: Decisions ──────────────────────────────────────────────────────
+# ── Agent 3: Decisions ────────────────────────────────────────────────────────
 
 def run_decision_agent(transcript: str) -> list[Decision]:
     system = """You are an expert meeting analyst.
@@ -197,15 +241,14 @@ Only include real decisions, not options being considered."""
 
     result = _extract_structured(
         system_prompt=system,
-        user_content=f"TRANSCRIPT:\n{transcript}",
+        user_content=f"TRANSCRIPT:\n{_cap_transcript(transcript)}",
         response_model=DecisionList,
         span_name="decision_agent",
     )
-
     return result.items
 
 
-# ─── Agent 4: Topics ─────────────────────────────────────────────────────────
+# ── Agent 4: Topics ───────────────────────────────────────────────────────────
 
 def run_topic_agent(transcript: str) -> list[Topic]:
     system = """You are an expert meeting analyst.
@@ -219,9 +262,8 @@ Cover the main themes only — do not list every sub-point."""
 
     result = _extract_structured(
         system_prompt=system,
-        user_content=f"TRANSCRIPT:\n{transcript}",
+        user_content=f"TRANSCRIPT:\n{_cap_transcript(transcript)}",
         response_model=TopicList,
         span_name="topic_agent",
     )
-
     return result.items

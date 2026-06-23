@@ -15,12 +15,13 @@
 import os
 import logging
 import datetime
-import json
+import json                          # FIX: removed duplicate import of json
+import secrets
 from contextlib import contextmanager
-import json
 
 import psycopg2
-import psycopg2.extras   # gives us RealDictCursor (rows as dicts, not tuples)
+import psycopg2.extras               # gives us RealDictCursor (rows as dicts, not tuples)
+import psycopg2.pool                 # FIX: added for connection pool
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -30,47 +31,77 @@ logger = logging.getLogger(__name__)
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 
+# ---------------------------------------------------------------------------
+# FIX: Connection pool — created ONCE when the server starts.
+#
+# Before: every database function called psycopg2.connect() which opened a
+# brand new TCP connection to Supabase, used it, then closed it.
+# That open+close costs 10-20ms every time and hits Supabase connection limits.
+#
+# After: 2 connections are opened at startup and kept alive.
+# Every function borrows one, uses it, returns it — takes <1ms.
+# Up to 10 connections can open under load. Max 10 — safe for Supabase limits.
+#
+# ThreadedConnectionPool because FastAPI handles requests in multiple threads —
+# this version has an internal lock so two threads cannot grab the same
+# connection at the same time.
+# ---------------------------------------------------------------------------
+_pool = None
+
+
+def _get_pool():
+    """
+    Returns the shared connection pool, creating it on the very first call.
+    You never call this directly — get_connection() calls it automatically.
+    """
+    global _pool
+    if _pool is None:
+        if not DATABASE_URL:
+            raise RuntimeError(
+                "DATABASE_URL is not set.\n"
+                "Add it to your .env file:\n"
+                "  DATABASE_URL=postgresql://postgres:password@db.xxx.supabase.co:5432/postgres\n"
+                "Get it from: Supabase dashboard -> Settings -> Database -> Connection string (Python)"
+            )
+        # FIX: create pool once at startup — connections reused across all requests
+        _pool = psycopg2.pool.ThreadedConnectionPool(
+            minconn=2,   # 2 connections always open and ready
+            maxconn=10,  # never more than 10 open at once
+            dsn=DATABASE_URL,
+        )
+        logger.info("Database connection pool created (min=2, max=10)")
+    return _pool
+
+
 @contextmanager
 def get_connection():
     """
-    Context manager that opens a PostgreSQL connection and closes it when done.
+    Borrows a connection from the pool, yields it, then returns it.
 
-    WHY A CONTEXT MANAGER?
-        SQLite's sqlite3.connect() is cheap — opening and closing connections
-        is nearly instant because it's just a local file.
-        PostgreSQL connections are more expensive — they involve a TCP handshake
-        with the database server. The context manager ensures we ALWAYS close
-        the connection, even if an exception happens halfway through.
-
-    Usage:
+    Usage is IDENTICAL to before — zero changes needed in any other file:
         with get_connection() as conn:
-            conn.execute(...)
-        # connection is automatically closed here
+            cur = conn.cursor()
+            cur.execute(...)
 
-    WHY NOT A CONNECTION POOL?
-        A pool reuses connections instead of opening/closing each time.
-        That's the right approach for high-traffic production (use psycopg2.pool
-        or SQLAlchemy). For Week 4 we keep it simple — one connection per request.
-        Week 4's rate limiting will prevent us from being overwhelmed anyway.
+    What changed internally:
+      Old: psycopg2.connect()  -> opens new TCP connection every time (~15ms)
+           conn.close()        -> tears it down after use
+
+      New: pool.getconn()      -> borrows already-open connection (<1ms)
+           pool.putconn(conn)  -> returns to pool for the next request
     """
-    if not DATABASE_URL:
-        raise RuntimeError(
-            "DATABASE_URL is not set.\n"
-            "Add it to your .env file:\n"
-            "  DATABASE_URL=postgresql://postgres:password@db.xxx.supabase.co:5432/postgres\n"
-            "Get it from: Supabase dashboard → Settings → Database → Connection string (Python)"
-        )
-
-    conn = psycopg2.connect(DATABASE_URL)
+    pool = _get_pool()
+    # FIX: borrow from pool instead of opening a fresh connection
+    conn = pool.getconn()
     try:
         yield conn
-        
         conn.commit()
     except Exception:
         conn.rollback()
         raise
     finally:
-        conn.close()
+        # FIX: return to pool instead of closing — stays alive for next request
+        pool.putconn(conn)
 
 
 # =============================================================================
@@ -216,9 +247,46 @@ def init_db():
 
         _init_workspace_tables(conn)
         _init_week6_tables(cur)
-        _init_sentiment_table(cur) 
+        _init_sentiment_table(cur)
 
-        logger.info("✓ Database tables verified / created")
+        # FIX: Missing indexes — without these every query that filters by
+        # user_id or meeting_id does a full table scan (reads every row).
+        #
+        # Example without index:  "get meetings for user 42"
+        #   → PostgreSQL reads ALL meetings rows, checks each one's user_id
+        #   → 10,000 meetings = 10,000 row reads on every dashboard load
+        #
+        # Example with index:     "get meetings for user 42"
+        #   → PostgreSQL jumps directly to user 42's rows via the index
+        #   → 10,000 meetings = ~5 reads, regardless of total table size
+        #
+        # IF NOT EXISTS = safe to run every startup — skips if already created.
+
+        # meetings.user_id — hit on: dashboard, tasks page, stats, GDPR export
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_meetings_user_id
+            ON meetings (user_id)
+        """)
+
+        # action_items.meeting_id — hit on: tasks page, meeting detail page
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_action_items_meeting_id
+            ON action_items (meeting_id)
+        """)
+
+        # workspace_members.user_id — hit on: every workspace page load
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_workspace_members_user_id
+            ON workspace_members (user_id)
+        """)
+
+        # meeting_titles.meeting_id — hit on: meetings list (joins titles)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_meeting_titles_meeting_id
+            ON meeting_titles (meeting_id)
+        """)
+
+        logger.info("✓ Database tables and indexes verified / created")
 
 # =============================================================================
 # MEETINGS
@@ -267,6 +335,187 @@ def get_all_transcripts(user_id: int = None):
         else:
             cur.execute("SELECT * FROM meetings ORDER BY id DESC")
         return cur.fetchall()
+
+
+def get_meetings_page(
+    user_id: int,
+    limit:   int = 20,
+    cursor:  int = None,
+) -> dict:
+    """
+    FIX: Paginated meetings list — returns one page at a time.
+
+    How cursor-based pagination works:
+      First call:  cursor=None  → returns first 20 meetings (newest first)
+      Next call:   cursor=42    → returns next 20 meetings with id < 42
+      And so on until has_more=False
+
+    Why cursor (id) instead of OFFSET?
+      OFFSET skips rows by counting from the start every time.
+      With 1000 meetings, "page 50" = scan and skip 980 rows = slow.
+      Cursor uses the index on id — always fast, any page.
+
+    Returns:
+      {
+        "items":    [...],   list of meeting dicts
+        "has_more": True,    whether more pages exist
+        "next_cursor": 38,   pass this as cursor on next call (None if last page)
+      }
+    """
+    # Fetch limit+1 rows — if we get limit+1 back, there IS a next page.
+    # We only return limit rows to the user but use the extra one to know
+    # whether has_more should be True.
+    fetch_count = limit + 1
+
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        if cursor is not None:
+            # cursor = id of the last item we already showed the user
+            # "give me meetings older than that id"
+            cur.execute(
+                """
+                SELECT id, filename, created_at, duration_seconds
+                FROM   meetings
+                WHERE  user_id = %s
+                  AND  id < %s
+                ORDER  BY id DESC
+                LIMIT  %s
+                """,
+                (user_id, cursor, fetch_count),
+            )
+        else:
+            # First page — no cursor yet
+            cur.execute(
+                """
+                SELECT id, filename, created_at, duration_seconds
+                FROM   meetings
+                WHERE  user_id = %s
+                ORDER  BY id DESC
+                LIMIT  %s
+                """,
+                (user_id, fetch_count),
+            )
+        rows = [dict(r) for r in cur.fetchall()]
+
+    has_more = len(rows) == fetch_count
+    items    = rows[:limit]           # trim the extra probe row
+    next_cursor = items[-1]["id"] if has_more and items else None
+
+    return {
+        "items":       items,
+        "has_more":    has_more,
+        "next_cursor": next_cursor,
+        "count":       len(items),
+    }
+
+
+def get_tasks_page(
+    user_id:  int,
+    limit:    int = 20,
+    cursor:   int = None,
+    status:   str = None,
+    priority: str = None,
+    owner:    str = None,
+) -> dict:
+    """
+    FIX: Paginated tasks list with optional filters.
+
+    Same cursor-based approach as get_meetings_page.
+    Tasks are joined to meetings to enforce user ownership —
+    a user can only see tasks from their own meetings.
+    """
+    fetch_count = limit + 1
+    conditions  = ["m.user_id = %s"]
+    params      = [user_id]
+
+    if cursor is not None:
+        conditions.append("ai.id < %s")
+        params.append(cursor)
+    if status:
+        conditions.append("ai.status = %s")
+        params.append(status.lower())
+    if priority:
+        conditions.append("ai.priority = %s")
+        params.append(priority.lower())
+    if owner:
+        conditions.append("ai.owner ILIKE %s")
+        params.append(f"%{owner}%")
+
+    where = " AND ".join(conditions)
+    params.append(fetch_count)
+
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            f"""
+            SELECT ai.id, ai.task, ai.status, ai.owner,
+                   ai.deadline, ai.priority, ai.meeting_id,
+                   m.filename AS meeting_filename
+            FROM   action_items ai
+            JOIN   meetings     m ON m.id = ai.meeting_id
+            WHERE  {where}
+            ORDER  BY ai.id DESC
+            LIMIT  %s
+            """,
+            params,
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+
+    has_more    = len(rows) == fetch_count
+    items       = rows[:limit]
+    next_cursor = items[-1]["id"] if has_more and items else None
+
+    return {
+        "items":       items,
+        "has_more":    has_more,
+        "next_cursor": next_cursor,
+        "count":       len(items),
+    }
+
+
+def get_user_stats(user_id: int) -> dict:
+    """
+    FIX: Returns dashboard stats for a user in ONE database query.
+
+    Old approach in get_stats() endpoint:
+        meetings = get_all_transcripts(user_id)     # query 1
+        for meeting in meetings:                    # loop
+            intel = get_meeting_intelligence(id)    # query per meeting!
+        # 50 meetings = 51 queries. 200 meetings = 201 queries.
+
+    New approach — one SQL query with JOINs and COUNT():
+        The database counts everything in one pass.
+        50 meetings = 1 query. 10,000 meetings = still 1 query.
+
+    How it works:
+        LEFT JOIN means: include the meeting even if it has no decisions/actions/topics.
+        COUNT(DISTINCT d.id) counts unique decision rows joined to this user's meetings.
+        DISTINCT is needed because JOINing multiple tables can create duplicate rows.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            """
+            SELECT
+                COUNT(DISTINCT m.id)            AS total_meetings,
+                COUNT(DISTINCT d.id)            AS total_decisions,
+                COUNT(DISTINCT ai.id)           AS total_actions,
+                COUNT(DISTINCT t.id)            AS total_topics
+            FROM meetings m
+            LEFT JOIN decisions    d  ON d.meeting_id  = m.id
+            LEFT JOIN action_items ai ON ai.meeting_id = m.id
+            LEFT JOIN topics       t  ON t.meeting_id  = m.id
+            WHERE m.user_id = %s
+            """,
+            (user_id,),
+        )
+        row = cur.fetchone()
+    return {
+        "total_meetings":  int(row["total_meetings"]  or 0),
+        "total_decisions": int(row["total_decisions"] or 0),
+        "total_actions":   int(row["total_actions"]   or 0),
+        "total_topics":    int(row["total_topics"]    or 0),
+    }
 
 
 def get_meeting_by_id(meeting_id: int, user_id: int = None) -> dict | None:
@@ -411,15 +660,29 @@ def save_meeting_health(meeting_id: int, health: dict) -> None:
 
 def get_meeting_health(meeting_id: int) -> dict | None:
     with get_connection() as conn:
-        cur = conn.cursor()
+        # FIX: Use RealDictCursor so rows come back as dicts {col_name: value}
+        # instead of tuples (value at position 0, 1, 2...).
+        #
+        # Old (fragile):  row[2], row[3], row[4]...
+        #   If any column is ever added or reordered, all position numbers
+        #   shift silently — returns WRONG DATA with no error or warning.
+        #
+        # New (safe):  row["overall_score"], row["participation"]...
+        #   Column names never change meaning. Self-documenting. Safe forever.
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute("SELECT * FROM meeting_health WHERE meeting_id = %s", (meeting_id,))
         row = cur.fetchone()
     if not row:
         return None
+    # FIX: named column access — replaces fragile row[2], row[3], row[4]...
     return {
-        "overall_score": row[2], "participation": row[3],
-        "decision_quality": row[4], "action_clarity": row[5],
-        "followup_risk": row[6], "highlights": row[7], "concerns": row[8],
+        "overall_score":    row["overall_score"],
+        "participation":    row["participation"],
+        "decision_quality": row["decision_quality"],
+        "action_clarity":   row["action_clarity"],
+        "followup_risk":    row["followup_risk"],
+        "highlights":       row["highlights"],
+        "concerns":         row["concerns"],
     }
 
 
@@ -1190,7 +1453,6 @@ def create_webhook(user_id: int, url: str, events: list[str]) -> dict:
  
     Returns the new webhook with its id and secret.
     """
-    import secrets
     webhook_secret = secrets.token_hex(32)   # 64-char hex string
  
     with get_connection() as conn:
@@ -1569,4 +1831,3 @@ def get_sentiment_analysis(meeting_id: int) -> dict | None:
     if isinstance(result, str):
         result = json.loads(result)
     return result
- 

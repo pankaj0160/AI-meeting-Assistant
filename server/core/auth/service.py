@@ -9,6 +9,7 @@ logging.getLogger('passlib').setLevel(logging.ERROR)
 import os
 import datetime
 import secrets
+import traceback          # FIX: moved from inside authenticate_user() to top
 from typing import Optional
 
 from jose import jwt, JWTError
@@ -21,11 +22,46 @@ from server.core.auth.models import User
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 # ── Config ─────────────────────────────────────────────────────────────────────
 
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "summly-secret-key-change-in-production")
+# FIX: Hardcoded default SECRET_KEY removed.
+#
+# The old code was:
+#   SECRET_KEY = os.getenv("JWT_SECRET_KEY", "summly-secret-key-change-in-production")
+#
+# The second argument is a fallback used when JWT_SECRET_KEY is not set.
+# This means if you deploy without setting the env var, your app runs silently
+# with a known public default — anyone who reads your source code knows your
+# secret and can forge JWT tokens to log in as any user.
+#
+# The fix: if the env var is missing, crash immediately at startup.
+# A loud crash at startup is far better than silently running insecurely.
+# The error message tells you exactly what to do to fix it.
+
+_raw_secret = os.getenv("JWT_SECRET_KEY")
+
+if not _raw_secret:
+    raise RuntimeError(
+        "\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "  JWT_SECRET_KEY environment variable is not set.\n"
+        "\n"
+        "  This key signs all login tokens. Without it,\n"
+        "  the app cannot run securely.\n"
+        "\n"
+        "  Fix: add this to your .env file:\n"
+        "    JWT_SECRET_KEY=<random 32+ character string>\n"
+        "\n"
+        "  Generate one right now by running:\n"
+        "    python3 -c \"import secrets; print(secrets.token_hex(32))\"\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    )
+
+SECRET_KEY = _raw_secret
 ALGORITHM  = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7   # 7 days
 
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -151,18 +187,28 @@ def update_user_password(user_id: int, new_password: str) -> None:
 
 
 def authenticate_user(email: str, password: str) -> Optional[User]:
-    try:
-        user = get_user_by_email(email)
-        if not user:
-            return None
-        if not verify_password(password, user.password_hash):
-            return None
-        update_last_login(user.id)
-        return user
-    except Exception:
-        import traceback
-        traceback.print_exc()
+    # FIX: Removed bare "except Exception: return None" that swallowed real errors.
+    #
+    # The old code caught ALL exceptions and returned None — including database
+    # connection failures. This meant:
+    #   - Database goes down → user sees "Invalid email or password"
+    #   - You have no idea the database is down
+    #   - Silent failure, impossible to debug from logs
+    #
+    # The new code only handles the expected case: wrong password → return None.
+    # Unexpected errors (database down, network failure) propagate up naturally
+    # and become a proper 500 error that gets logged with a full traceback.
+    #
+    # Rule: only catch exceptions you know how to handle.
+    # Let everything else propagate so it gets logged properly.
+
+    user = get_user_by_email(email)
+    if not user:
         return None
+    if not verify_password(password, user.password_hash):
+        return None
+    update_last_login(user.id)
+    return user
 
 
 # ── Password reset tokens ──────────────────────────────────────────────────────
@@ -177,6 +223,8 @@ def create_reset_token(email: str) -> Optional[str]:
 
     with get_connection() as conn:
         cur = conn.cursor()
+        # Delete any existing token for this user before creating a new one
+        # — a user should only ever have one active reset token at a time
         cur.execute("DELETE FROM password_reset_tokens WHERE user_id = %s", (user.id,))
         cur.execute(
             """
@@ -197,7 +245,7 @@ def consume_reset_token(token: str, new_password: str) -> bool:
         if not row:
             return False
 
-        # expires_at comes back as a real datetime from PostgreSQL (no fromisoformat needed)
+        # expires_at comes back as a real datetime from PostgreSQL
         if datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc) > row["expires_at"]:
             cur.execute("DELETE FROM password_reset_tokens WHERE token = %s", (token,))
             return False

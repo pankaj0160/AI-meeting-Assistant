@@ -26,16 +26,46 @@ function fmt(iso) {
 export default function Meetings() {
   const { T } = useTheme()
   const navigate = useNavigate()
-  const [meetings, setMeetings] = useState([])
-  const [loading,  setLoading]  = useState(true)
-  const [query,    setQuery]    = useState('')
 
+  // FIX: Pagination state.
+  // meetings   = array that grows as user loads more pages
+  // cursor     = id of the last item we loaded (sent to server for next page)
+  // hasMore    = whether server says there are more pages
+  // loadingMore = true only when loading additional pages (not the first)
+  const [meetings,    setMeetings]    = useState([])
+  const [loading,     setLoading]     = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [cursor,      setCursor]      = useState(null)
+  const [hasMore,     setHasMore]     = useState(false)
+  const [query,       setQuery]       = useState('')
+
+  // FIX: load first page on mount
   useEffect(() => {
-    getMeetings()
-      .then(setMeetings)
+    getMeetings({ limit: 20 })
+      .then(data => {
+        setMeetings(data.items || [])
+        setHasMore(data.has_more || false)
+        setCursor(data.next_cursor || null)
+      })
       .catch(() => setMeetings([]))
       .finally(() => setLoading(false))
   }, [])
+
+  // FIX: load next page — appends to existing list
+  const loadMore = async () => {
+    if (!cursor || loadingMore) return
+    setLoadingMore(true)
+    try {
+      const data = await getMeetings({ cursor, limit: 20 })
+      setMeetings(prev => [...prev, ...(data.items || [])])
+      setHasMore(data.has_more || false)
+      setCursor(data.next_cursor || null)
+    } catch {
+      // silently fail — user can retry
+    } finally {
+      setLoadingMore(false)
+    }
+  }
 
   const filtered = meetings.filter(m =>
     (m.filename || '').toLowerCase().includes(query.toLowerCase())
@@ -152,6 +182,44 @@ export default function Meetings() {
                 T={T}
               />
             ))}
+
+            {/* FIX: Load more button — only shown when more pages exist */}
+            {hasMore && !query && (
+              <div style={{ padding: '20px 24px', borderTop: `1px solid ${T.border}` }}>
+                <button
+                  onClick={loadMore}
+                  disabled={loadingMore}
+                  style={{
+                    width: '100%',
+                    padding: '10px',
+                    borderRadius: '10px',
+                    border: `1px solid ${T.border}`,
+                    background: T.surface,
+                    color: T.text2,
+                    fontSize: '13.5px',
+                    fontWeight: 500,
+                    cursor: loadingMore ? 'not-allowed' : 'pointer',
+                    opacity: loadingMore ? 0.6 : 1,
+                    fontFamily: 'var(--font)',
+                    transition: 'all 0.15s',
+                  }}
+                >
+                  {loadingMore ? 'Loading...' : 'Load more meetings'}
+                </button>
+              </div>
+            )}
+
+            {!hasMore && meetings.length > 0 && !query && (
+              <div style={{
+                padding: '16px 24px',
+                textAlign: 'center',
+                fontSize: '12px',
+                color: T.text3,
+                borderTop: `1px solid ${T.border}`,
+              }}>
+                All {meetings.length} meetings loaded
+              </div>
+            )}
           </div>
         )}
       </Card>
