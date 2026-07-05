@@ -34,7 +34,7 @@ function AnimatedName() {
   const letters = 'PANKAJ THAKUR'.split('')
 
   return (
-    <div style={{
+    <div className="page-enter" style={{
       fontSize: 'clamp(48px, 7vw, 88px)',
       fontWeight: 900,
       letterSpacing: '-0.05em',
@@ -408,7 +408,7 @@ export default function Creator() {
               onClick={() => navigate('/register')}
               style={{
                 padding: '13px 28px', borderRadius: '12px',
-                background: T.btnGrad, border: 'none',
+                background: isDark ? '#10b981' : '#059669', border: 'none',
                 color: '#fff', fontSize: '15px', fontWeight: 700,
                 cursor: 'pointer', boxShadow: T.btnShadow,
                 display: 'inline-flex', alignItems: 'center', gap: '8px',
@@ -606,7 +606,7 @@ export default function Creator() {
         <div style={{ maxWidth: '600px', margin: '0 auto' }}>
           <div style={{
             width: '56px', height: '56px', borderRadius: '16px',
-            background: T.btnGrad, boxShadow: T.btnShadow,
+            background: isDark ? '#10b981' : '#059669', boxShadow: T.btnShadow,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             margin: '0 auto 20px',
           }}>
@@ -629,7 +629,7 @@ export default function Creator() {
             onClick={() => navigate('/register')}
             style={{
               padding: '13px 32px', borderRadius: '12px',
-              background: T.btnGrad, border: 'none',
+              background: isDark ? '#10b981' : '#059669', border: 'none',
               color: '#fff', fontSize: '15px', fontWeight: 700,
               cursor: 'pointer', boxShadow: T.btnShadow,
               display: 'inline-flex', alignItems: 'center', gap: '8px',

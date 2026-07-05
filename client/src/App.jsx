@@ -24,7 +24,8 @@ import Chat          from './pages/Chat'
 import Tasks         from './pages/Tasks'
 import Analytics     from './pages/Analytics'
 import Settings      from './pages/Settings'
-
+import Workspaces    from './pages/Workspaces'
+import { CommandPaletteProvider } from './components/CommandPalette'
 // FIX: PageBoundary wraps each individual page route.
 //
 // Why per-page boundaries instead of just one global one?
@@ -56,6 +57,7 @@ function PageBoundary({ title, children }) {
 export default function App() {
   return (
     <BrowserRouter>
+    <CommandPaletteProvider> 
       <Routes>
 
         {/* ── Public routes ── */}
@@ -132,12 +134,19 @@ export default function App() {
               <Settings />
             </PageBoundary>
           } />
+
+          <Route path="workspaces"   element={
+            <PageBoundary title="Workspaces">
+              <Workspaces />
+            </PageBoundary>
+          } />
         </Route>
 
         {/* ── Catch all ── */}
         <Route path="*" element={<Navigate to="/" replace />} />
 
       </Routes>
+      </CommandPaletteProvider>
     </BrowserRouter>
   )
 }

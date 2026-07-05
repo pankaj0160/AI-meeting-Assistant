@@ -1,44 +1,41 @@
 # server/core/storage.py
 #
-# New file. Create it at exactly that path.
-# This module handles all file uploads to Supabase Storage.
+# Handles all file uploads/downloads/deletes to Supabase Storage.
 # The rest of your code never talks to Supabase directly — it calls
 # functions from this file only.
-#
-# WHY ISOLATE IT HERE?
-#   If you ever want to switch from Supabase to AWS S3 or Cloudflare R2,
-#   you only change this one file. Nothing in main.py changes.
 
 import os
 import logging
 from pathlib import Path
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Supabase bucket name — matches what you created in the dashboard
 BUCKET = os.getenv("SUPABASE_BUCKET", "meeting-files")
 
-# We create the client lazily (on first use) because importing supabase
-# at module load time would crash the server if credentials aren't set yet
 _client = None
+
+
+class StorageError(Exception):
+    """Raised when a Supabase Storage operation fails."""
+    pass
 
 
 def _get_client():
     """
-    Returns the Supabase client, creating it on first call.
-
-    WHY LAZY INITIALIZATION?
-        If we created the client at import time (module level), the server
-        would crash at startup whenever SUPABASE_URL isn't set — like
-        during tests, or a developer's first run before they've set up .env.
-        Lazy init means the error only happens when you actually try to
-        upload something.
+    Returns the Supabase client, creating it on first call (lazy init).
+    Raises RuntimeError clearly if credentials are missing.
     """
     global _client
     if _client is None:
-        from supabase import create_client
+        try:
+            from supabase import create_client
+        except ImportError:
+            raise RuntimeError(
+                "supabase-py is not installed. Run: pip install supabase"
+            )
 
-        url = os.getenv("SUPABASE_URL")
+        url = os.getenv("SUPABASE_URL", "").rstrip("/")
         key = os.getenv("SUPABASE_SERVICE_KEY")
 
         if not url or not key:
@@ -51,40 +48,43 @@ def _get_client():
                 "Get them from: Supabase dashboard → Settings → API"
             )
 
+        if not url.startswith("https://"):
+            raise RuntimeError(
+                f"SUPABASE_URL looks wrong: '{url}'\n"
+                "It must start with https://"
+            )
+
         _client = create_client(url, key)
         logger.info(f"Supabase client initialized (bucket: {BUCKET})")
 
     return _client
 
 
-def upload_file(local_path: str, filename: str) -> str:
+def _check_response(response, operation: str, filename: str) -> None:
     """
-    Upload a file from your server's disk to Supabase Storage.
-    Returns the public URL of the uploaded file.
+    Inspect a Supabase storage response and raise StorageError on failure.
 
-    HOW IT WORKS:
-        1. Read the file from local_path into memory as bytes
-        2. Send those bytes to Supabase via their Storage API
-        3. Return the public URL so you can save it to the database
+    The supabase-py SDK (v1 and v2) returns different shapes:
+      - v1: a dict like {"data": {...}} or {"error": {"message": "..."}}
+      - v2: raises an exception directly on failure
 
-    Args:
-        local_path : path to the file on disk, e.g. "uploads/audio/standup.wav"
-        filename   : what to name it in Supabase, e.g. "user_5/standup.wav"
-                     (including a user subfolder keeps things organised)
-
-    Returns:
-        Public URL string like:
-        "https://abcdef.supabase.co/storage/v1/object/public/meeting-files/user_5/standup.wav"
+    This handles both.
     """
-    client = _get_client()
+    if response is None:
+        raise StorageError(f"{operation} returned None for '{filename}'")
 
-    with open(local_path, "rb") as f:
-        file_bytes = f.read()
+    # v1 SDK: response is a dict
+    if isinstance(response, dict):
+        error = response.get("error")
+        if error:
+            # error can be a dict {"message": "..."} or a string
+            msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+            raise StorageError(f"{operation} failed for '{filename}': {msg}")
 
-    # Guess the MIME type from the file extension
-    # Supabase uses this to serve the file with the right Content-Type header
+
+def _guess_content_type(filename: str) -> str:
     ext = Path(filename).suffix.lower()
-    content_type_map = {
+    return {
         ".wav":  "audio/wav",
         ".mp3":  "audio/mpeg",
         ".m4a":  "audio/mp4",
@@ -92,76 +92,147 @@ def upload_file(local_path: str, filename: str) -> str:
         ".mov":  "video/quicktime",
         ".avi":  "video/x-msvideo",
         ".webm": "video/webm",
-    }
-    content_type = content_type_map.get(ext, "application/octet-stream")
+        ".pdf":  "application/pdf",
+        ".txt":  "text/plain",
+        ".json": "application/json",
+    }.get(ext, "application/octet-stream")
 
-    logger.info(f"Uploading {filename} to Supabase bucket '{BUCKET}'...")
 
-    # upsert=True means: overwrite if a file with this name already exists
-    # Without upsert, re-uploading the same filename raises an error
-    client.storage.from_(BUCKET).upload(
-        path=filename,
-        file=file_bytes,
-        file_options={"content-type": content_type, "upsert": "true"},
-    )
+def _build_public_url(filename: str) -> str:
+    """Construct the public URL without any extra slashes."""
+    base = os.getenv("SUPABASE_URL", "").rstrip("/")
+    # filename may already have a leading slash — strip it to be safe
+    clean = filename.lstrip("/")
+    return f"{base}/storage/v1/object/public/{BUCKET}/{clean}"
 
-    # Build the public URL
-    # Supabase public bucket URLs follow this exact pattern
-    url = os.getenv("SUPABASE_URL").rstrip("/")
-    public_url = f"{url}/storage/v1/object/public/{BUCKET}/{filename}"
 
-    logger.info(f"Uploaded successfully: {public_url}")
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def upload_file(local_path: str, filename: str) -> str:
+    """
+    Upload a file from disk to Supabase Storage.
+
+    Args:
+        local_path : path on disk, e.g. "uploads/audio/standup.wav"
+        filename   : destination in bucket, e.g. "user_5/standup.wav"
+
+    Returns:
+        Public URL string.
+
+    Raises:
+        FileNotFoundError : if local_path doesn't exist
+        StorageError      : if the upload fails
+    """
+    path = Path(local_path)
+    if not path.exists():
+        raise FileNotFoundError(f"File not found: {local_path}")
+
+    file_bytes = path.read_bytes()
+    content_type = _guess_content_type(filename)
+
+    logger.info(f"Uploading '{filename}' ({len(file_bytes):,} bytes) to bucket '{BUCKET}'...")
+
+    try:
+        client = _get_client()
+        response = client.storage.from_(BUCKET).upload(
+            path=filename,
+            file=file_bytes,
+            file_options={"content-type": content_type, "upsert": "true"},
+        )
+        _check_response(response, "upload_file", filename)
+    except StorageError:
+        raise
+    except Exception as e:
+        raise StorageError(f"upload_file failed for '{filename}': {e}") from e
+
+    public_url = _build_public_url(filename)
+    logger.info(f"Upload successful: {public_url}")
     return public_url
 
 
-def upload_bytes(file_bytes: bytes, filename: str, content_type: str) -> str:
+def upload_bytes(file_bytes: bytes, filename: str, content_type: Optional[str] = None) -> str:
     """
-    Upload raw bytes directly to Supabase (no local file needed).
-    Use this when you have the file in memory and don't want to write it to disk first.
+    Upload raw bytes to Supabase (no local file needed).
 
     Args:
-        file_bytes   : the file content as bytes
-        filename     : destination path in the bucket, e.g. "user_5/standup.wav"
-        content_type : MIME type, e.g. "audio/wav"
+        file_bytes   : file content as bytes
+        filename     : destination path in bucket, e.g. "user_5/standup.wav"
+        content_type : MIME type; auto-detected from filename if omitted
 
     Returns:
-        Public URL string
+        Public URL string.
+
+    Raises:
+        StorageError : if the upload fails
     """
-    client = _get_client()
+    if not file_bytes:
+        raise ValueError("file_bytes must not be empty")
 
-    client.storage.from_(BUCKET).upload(
-        path=filename,
-        file=file_bytes,
-        file_options={"content-type": content_type, "upsert": "true"},
-    )
+    ct = content_type or _guess_content_type(filename)
 
-    url = os.getenv("SUPABASE_URL").rstrip("/")
-    return f"{url}/storage/v1/object/public/{BUCKET}/{filename}"
+    logger.info(f"Uploading bytes '{filename}' ({len(file_bytes):,} bytes) to bucket '{BUCKET}'...")
+
+    try:
+        client = _get_client()
+        response = client.storage.from_(BUCKET).upload(
+            path=filename,
+            file=file_bytes,
+            file_options={"content-type": ct, "upsert": "true"},
+        )
+        _check_response(response, "upload_bytes", filename)
+    except StorageError:
+        raise
+    except Exception as e:
+        raise StorageError(f"upload_bytes failed for '{filename}': {e}") from e
+
+    public_url = _build_public_url(filename)
+    logger.info(f"Upload successful: {public_url}")
+    return public_url
 
 
 def delete_file(filename: str) -> None:
     """
     Delete a file from Supabase Storage.
-    Use this when a user deletes their meeting — clean up the file too.
+    Idempotent — does not raise if the file doesn't exist.
 
-    Does NOT raise an error if the file doesn't exist (idempotent).
+    Raises:
+        StorageError : if deletion fails for a reason other than "not found"
     """
     try:
         client = _get_client()
-        client.storage.from_(BUCKET).remove([filename])
-        logger.info(f"Deleted from Supabase: {filename}")
+        response = client.storage.from_(BUCKET).remove([filename])
+        _check_response(response, "delete_file", filename)
+        logger.info(f"Deleted from Supabase: '{filename}'")
+    except StorageError as e:
+        msg = str(e).lower()
+        if "not found" in msg or "does not exist" in msg:
+            logger.warning(f"File already gone (skipping): '{filename}'")
+        else:
+            raise
     except Exception as e:
-        # Log but don't crash — a missing file isn't fatal
-        logger.warning(f"Could not delete {filename} from Supabase: {e}")
+        # Log but don't crash — a failed delete shouldn't break the caller
+        logger.warning(f"Could not delete '{filename}' from Supabase: {e}")
 
 
 def get_public_url(filename: str) -> str:
     """
-    Get the public URL for an already-uploaded file.
-    No network call — just builds the URL from the filename.
-
-    Use this when you have the filename stored in the database
-    and need to give the user a download link.
+    Build the public URL for an already-uploaded file.
+    Pure string construction — no network call.
     """
-    url = os.getenv("SUPABASE_URL", "").rstrip("/")
-    return f"{url}/storage/v1/object/public/{BUCKET}/{filename}"
+    return _build_public_url(filename)
+
+
+def bucket_exists() -> bool:
+    """
+    Health-check helper: returns True if the bucket is reachable.
+    Call this from your /health endpoint to surface misconfigurations early.
+    """
+    try:
+        client = _get_client()
+        client.storage.from_(BUCKET).list()
+        return True
+    except Exception as e:
+        logger.error(f"Bucket '{BUCKET}' health check failed: {e}")
+        return False

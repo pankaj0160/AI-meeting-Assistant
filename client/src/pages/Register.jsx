@@ -2,10 +2,11 @@
 
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Eye, EyeOff, Mic, ArrowRight, AlertCircle, CheckCircle } from 'lucide-react'
+import { Eye, EyeOff, ArrowRight, AlertCircle, CheckCircle } from 'lucide-react'
 import { useTheme } from '../ThemeContext'
 import { useAuth } from '../context/AuthContext'
 import { apiRegister } from '../api/client'
+import Logo from '../components/Logo'
 
 export default function Register() {
   const { T, isDark, toggle } = useTheme()
@@ -26,7 +27,7 @@ export default function Register() {
     if (password.length < 12) return { level: 1, label: 'Weak',       color: '#f59e0b' }
     if (/[A-Z]/.test(password) && /[0-9]/.test(password))
                                return { level: 3, label: 'Strong',     color: '#10b981' }
-    return                            { level: 2, label: 'Good',       color: '#6366f1' }
+    return                            { level: 2, label: 'Good',       color: '#3b82f6' }
   })()
 
   const handleSubmit = async (e) => {
@@ -88,25 +89,12 @@ export default function Register() {
 
       <div className="anim-fade-up" style={{ width: '100%', maxWidth: '440px' }}>
 
-        {/* Logo */}
+        {/* Logo — was a mic icon, now the same waveform mark used app-wide */}
         <div style={{
           display: 'flex', alignItems: 'center',
-          justifyContent: 'center', gap: '10px',
-          marginBottom: '36px',
+          justifyContent: 'center', marginBottom: '36px',
         }}>
-          <div style={{
-            width: '40px', height: '40px', borderRadius: '11px',
-            background: T.btnGrad, boxShadow: T.btnShadow,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <Mic size={20} color="#fff" strokeWidth={2.5} />
-          </div>
-          <span style={{
-            fontSize: '22px', fontWeight: 800,
-            letterSpacing: '-0.04em', color: T.text,
-          }}>
-            Summly
-          </span>
+          <Logo size={40} wordmarkSize={22} />
         </div>
 
         <div style={{

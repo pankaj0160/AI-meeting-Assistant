@@ -2,10 +2,11 @@
 
 import { useState } from 'react'
 import { Link, useNavigate, useLocation } from 'react-router-dom'
-import { Eye, EyeOff, Mic, ArrowRight, AlertCircle } from 'lucide-react'
+import { Eye, EyeOff, ArrowRight, AlertCircle } from 'lucide-react'
 import { useTheme } from '../ThemeContext'
 import { useAuth } from '../context/AuthContext'
 import { apiLogin } from '../api/client'
+import Logo from '../components/Logo'
 
 export default function Login() {
   const { T, isDark, toggle } = useTheme()
@@ -82,25 +83,12 @@ export default function Login() {
         width: '100%', maxWidth: '420px',
       }}>
 
-        {/* Logo */}
+        {/* Logo — was a mic icon, now the same waveform mark used app-wide */}
         <div style={{
           display: 'flex', alignItems: 'center',
-          justifyContent: 'center', gap: '10px',
-          marginBottom: '36px',
+          justifyContent: 'center', marginBottom: '36px',
         }}>
-          <div style={{
-            width: '40px', height: '40px', borderRadius: '11px',
-            background: T.btnGrad, boxShadow: T.btnShadow,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <Mic size={20} color="#fff" strokeWidth={2.5} />
-          </div>
-          <span style={{
-            fontSize: '22px', fontWeight: 800,
-            letterSpacing: '-0.04em', color: T.text,
-          }}>
-            Summly
-          </span>
+          <Logo size={40} wordmarkSize={22} />
         </div>
 
         {/* Card */}

@@ -158,9 +158,9 @@ Pankaj: Great work everyone. Let's make this launch a success.`
 
 // ── Section header ─────────────────────────────────────────────────────────────
 function SectionHead({ icon, title, count, color, bg }) {
-  const { T } = useTheme()
+  const { T, isDark } = useTheme()
   return (
-    <div style={{
+    <div className="page-enter" style={{
       display: 'flex', alignItems: 'center',
       justifyContent: 'space-between', marginBottom: '18px',
     }}>
@@ -193,7 +193,7 @@ function SectionHead({ icon, title, count, color, bg }) {
 }
 
 export default function Demo() {
-  const { T }           = useTheme()
+  const { T, isDark }   = useTheme() 
   const { isAuthenticated } = useAuth()
   const navigate        = useNavigate()
   const [activeTab, setActiveTab] = useState('summary')
@@ -522,7 +522,7 @@ export default function Demo() {
                 onClick={() => navigate('/app/upload')}
                 style={{
                   padding: '13px 32px', borderRadius: '12px',
-                  background: T.btnGrad, border: 'none',
+                  background: isDark ? '#10b981' : '#059669', border: 'none',
                   color: '#fff', fontSize: '15px', fontWeight: 700,
                   cursor: 'pointer', boxShadow: T.btnShadow,
                   display: 'inline-flex', alignItems: 'center', gap: '8px',
@@ -537,7 +537,7 @@ export default function Demo() {
                   onClick={() => navigate('/register')}
                   style={{
                     padding: '13px 32px', borderRadius: '12px',
-                    background: T.btnGrad, border: 'none',
+                    background: isDark ? '#10b981' : '#059669', border: 'none',
                     color: '#fff', fontSize: '15px', fontWeight: 700,
                     cursor: 'pointer', boxShadow: T.btnShadow,
                     display: 'inline-flex', alignItems: 'center', gap: '8px',

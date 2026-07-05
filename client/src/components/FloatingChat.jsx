@@ -5,6 +5,7 @@ import { useTheme } from '../ThemeContext'
 import { MessageSquare, X, Send, Bot, User, Sparkles } from 'lucide-react'
 import { getMeetings, chatAcrossMeetings, chatWithMeeting } from '../api/client'
 import { useLocation } from 'react-router-dom'
+import { useScreenSize } from '../hooks/useScreenSize'
 
 // Extract meeting ID from URL if on meeting detail page
 function useMeetingIdFromUrl() {
@@ -21,7 +22,9 @@ const QUICK = [
 
 export default function FloatingChat() {
   const { T }       = useTheme()
+  const { isMobile } = useScreenSize()
   const meetingId   = useMeetingIdFromUrl()
+  const loc         = useLocation()
 
   const [open,     setOpen]     = useState(false)
   const [messages, setMessages] = useState([])
@@ -41,6 +44,10 @@ export default function FloatingChat() {
     const t = setTimeout(() => setPulse(true), 3000)
     return () => clearTimeout(t)
   }, [])
+
+  // FIX: /app/chat is this exact same AI chat experience, full-page. Showing
+  // the floating bubble there too was redundant (two overlapping chat UIs).
+  const onChatPage = loc.pathname.startsWith('/app/chat')
 
   const send = async (text) => {
     const q = (text || input).trim()
@@ -71,13 +78,31 @@ export default function FloatingChat() {
     }
   }
 
+  if (onChatPage) return null
+
   return (
     <>
       {/* ── Chat window ── */}
       {open && (
         <div
           className="anim-fade-up"
-          style={{
+          style={isMobile ? {
+            // FIX: the fixed 380x520 desktop box would overflow almost any
+            // phone screen and could land underneath the bottom nav. On
+            // mobile this now fills the space between the top bar and the
+            // bottom nav, with small side margins, instead of a fixed size.
+            position: 'fixed',
+            left: '10px', right: '10px',
+            top: 'calc(52px + env(safe-area-inset-top) + 10px)',
+            bottom: 'calc(64px + env(safe-area-inset-bottom) + 10px)',
+            background: T.surface,
+            border: `1px solid ${T.border}`,
+            borderRadius: '18px',
+            boxShadow: '0 24px 64px rgba(0,0,0,0.35)',
+            display: 'flex', flexDirection: 'column',
+            overflow: 'hidden',
+            zIndex: 998,
+          } : {
             position: 'fixed',
             bottom: '88px', right: '28px',
             width: '380px', height: '520px',
@@ -342,9 +367,14 @@ export default function FloatingChat() {
         onClick={() => { setOpen(o => !o); setPulse(false) }}
         style={{
           position: 'fixed',
-          bottom: '28px', right: '28px',
-          width: '52px', height: '52px',
-          borderRadius: '16px',
+          // FIX: BottomNav spans the full width at the bottom of the screen
+          // on mobile — a button anchored at bottom:28px would sit right on
+          // top of it. This clears the nav bar plus safe-area inset.
+          bottom: isMobile ? 'calc(64px + env(safe-area-inset-bottom) + 14px)' : '28px',
+          right: isMobile ? '14px' : '28px',
+          width: isMobile ? '46px' : '52px',
+          height: isMobile ? '46px' : '52px',
+          borderRadius: isMobile ? '14px' : '16px',
           background: open ? T.surface2 : T.btnGrad,
           border: open ? `1px solid ${T.border}` : 'none',
           boxShadow: open ? T.cardShadow : T.btnShadow,
@@ -358,8 +388,8 @@ export default function FloatingChat() {
         onMouseLeave={e => e.currentTarget.style.transform = 'scale(1)'}
       >
         {open
-          ? <X size={20} color={T.text2} />
-          : <MessageSquare size={20} color="#fff" />
+          ? <X size={isMobile ? 18 : 20} color={T.text2} />
+          : <MessageSquare size={isMobile ? 18 : 20} color="#fff" />
         }
         {/* Pulse ring */}
         {pulse && !open && (

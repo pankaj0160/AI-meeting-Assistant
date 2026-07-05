@@ -6,14 +6,17 @@ import {
   User, Lock, Palette, Database,
   LogOut, Save, AlertCircle,
   CheckCircle, Eye, EyeOff, Trash2,
-  Download, Sun, Moon, Info
+  Download, Sun, Moon, Info, Sparkles
 } from 'lucide-react'
 import { useTheme } from '../ThemeContext'
 import { useAuth } from '../context/AuthContext'
 import {
-  apiUpdateProfile, apiChangePassword
+  apiUpdateProfile, apiChangePassword,
+  exportMyData, deleteMyAccount,
+  vacuumOrphanedChunks,
 } from '../api/client'
 import { PageHeader, Card, Button, Divider } from '../components/ui'
+import { useToast } from '../components/Toast'
 
 // ── Spacing scale (px) ────────────────────────────────────────────────────────
 // sp1=4  sp2=8  sp3=12  sp4=16  sp5=20  sp6=24  sp7=28  sp8=32  sp10=40
@@ -141,9 +144,10 @@ export default function Settings() {
   const { T, isDark, toggle } = useTheme()
   const { user, logout, updateUser } = useAuth()
   const navigate = useNavigate()
+  const { toast } = useToast()
 
   // Profile form
-  const [fullName,      setFullName]      = useState(user?.full_name || '')
+  const [fullName,       setFullName]       = useState(user?.full_name || '')
   const [profileLoading, setProfileLoading] = useState(false)
   const [profileAlert,   setProfileAlert]   = useState(null)
 
@@ -154,6 +158,13 @@ export default function Settings() {
   const [showPws,   setShowPws]   = useState(false)
   const [pwLoading, setPwLoading] = useState(false)
   const [pwAlert,   setPwAlert]   = useState(null)
+
+  // Data export + account delete
+  const [exporting,       setExporting]       = useState(false)
+  const [vacuuming,       setVacuuming]       = useState(false)
+  const [showDeleteModal, setShowDeleteModal] = useState(false)
+  const [deleteConfirm,   setDeleteConfirm]   = useState('')
+  const [deleting,        setDeleting]        = useState(false)
 
   // Avatar initial
   const initial = user?.full_name?.charAt(0).toUpperCase() || '?'
@@ -201,6 +212,66 @@ export default function Settings() {
   const handleLogout = () => {
     logout()
     navigate('/login', { replace: true })
+  }
+
+  // Export my data — downloads a JSON file of all meetings/intelligence
+  const handleExportData = async () => {
+    setExporting(true)
+    try {
+      const blob = await exportMyData()
+      const url  = URL.createObjectURL(blob)
+      const a    = Object.assign(document.createElement('a'), {
+        href:     url,
+        download: `summly_export_${new Date().toISOString().slice(0,10)}.json`,
+      })
+      a.click()
+      URL.revokeObjectURL(url)
+      toast.success('Export downloaded', 'Your data has been saved as a JSON file.')
+    } catch (e) {
+      toast.error('Export failed', e.message)
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  // FIX: lets users clean up ChromaDB vectors left behind by meetings that
+  // were deleted directly in Supabase (before DELETE /meetings/{id}
+  // existed). Those orphaned vectors can surface in chat under a
+  // completely different, currently-active meeting that happens to share
+  // the old one's meeting_id. Safe to run any time — it only ever removes
+  // vectors whose meeting_id has zero matching row in the database.
+  const handleVacuum = async () => {
+    setVacuuming(true)
+    try {
+      const res = await vacuumOrphanedChunks()
+      const parts = []
+      if (res.chunks_fixed) parts.push(`repaired ownership on ${res.chunks_fixed} chunk${res.chunks_fixed !== 1 ? 's' : ''}`)
+      if (res.orphaned_meeting_ids?.length) parts.push(`removed ${res.chunks_deleted} orphaned chunk${res.chunks_deleted !== 1 ? 's' : ''} left over from ${res.orphaned_meeting_ids.length} deleted meeting${res.orphaned_meeting_ids.length !== 1 ? 's' : ''}`)
+      if (parts.length) {
+        toast.success('Cleanup complete', parts.join(' and ') + '.')
+      } else {
+        toast.success('Nothing to clean up', 'No issues found — everything is in sync.')
+      }
+    } catch (e) {
+      toast.error('Cleanup failed', e.message)
+    } finally {
+      setVacuuming(false)
+    }
+  }
+
+  // Delete account — requires typing "DELETE" to confirm
+  const handleDeleteAccount = async () => {
+    if (deleteConfirm !== 'DELETE') return
+    setDeleting(true)
+    try {
+      await deleteMyAccount('DELETE')
+      toast.success('Account deleted', 'Your account has been permanently removed.')
+      logout()
+      navigate('/', { replace: true })
+    } catch (e) {
+      toast.error('Delete failed', e.message)
+      setDeleting(false)
+    }
   }
 
   return (
@@ -437,10 +508,43 @@ export default function Settings() {
               <Button
                 variant="ghost" size="sm"
                 icon={<Download size={13} />}
-                onClick={() => alert('Export feature coming soon.')}
+                onClick={handleExportData}
+                loading={exporting}
                 style={{ flexShrink: 0 }}
               >
                 Export
+              </Button>
+            </div>
+
+            <Divider />
+
+            <div style={{
+              display: 'flex', alignItems: 'center',
+              justifyContent: 'space-between', gap: '16px',
+            }}>
+              <div>
+                <div style={{
+                  fontSize: '14px', fontWeight: 600, color: T.text,
+                  marginBottom: '4px',
+                }}>
+                  Clean up orphaned chat data
+                </div>
+                <div style={{ fontSize: '13px', color: T.text3, lineHeight: 1.5 }}>
+                  If a meeting was ever deleted outside the app (directly in the
+                  database), leftover chat data from it can persist and
+                  occasionally surface in answers about other meetings. This
+                  removes anything no longer tied to a meeting you have. Safe to
+                  run any time.
+                </div>
+              </div>
+              <Button
+                variant="ghost" size="sm"
+                icon={<Sparkles size={13} />}
+                onClick={handleVacuum}
+                loading={vacuuming}
+                style={{ flexShrink: 0 }}
+              >
+                Clean Up
               </Button>
             </div>
 
@@ -456,7 +560,6 @@ export default function Settings() {
                 justifyContent: 'space-between', gap: '16px',
               }}>
                 <div>
-                  {/* 4px between danger title and description */}
                   <div style={{
                     fontSize: '14px', fontWeight: 600,
                     color: T.danger, marginBottom: '4px',
@@ -473,13 +576,76 @@ export default function Settings() {
                 <Button
                   variant="danger" size="sm"
                   icon={<Trash2 size={13} />}
-                  onClick={() => alert('Account deletion coming soon.')}
+                  onClick={() => setShowDeleteModal(true)}
                   style={{ flexShrink: 0 }}
                 >
                   Delete
                 </Button>
               </div>
             </div>
+
+            {/* Delete confirmation modal */}
+            {showDeleteModal && (
+              <div style={{
+                position: 'fixed', inset: 0,
+                background: 'rgba(0,0,0,0.70)',
+                backdropFilter: 'blur(8px)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                zIndex: 800, padding: '24px',
+              }}>
+                <div className="anim-scale-spring" style={{
+                  background: T.surface, border: `1px solid ${T.border}`,
+                  borderRadius: '18px', width: '100%', maxWidth: '420px',
+                  padding: '28px', boxShadow: '0 24px 60px rgba(0,0,0,0.4)',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
+                    <div style={{
+                      width: 38, height: 38, borderRadius: '10px',
+                      background: `${T.danger}14`,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }}>
+                      <Trash2 size={17} color={T.danger} />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '15px', fontWeight: 700, color: T.text }}>Delete Account</div>
+                      <div style={{ fontSize: '12px', color: T.text3 }}>This cannot be undone.</div>
+                    </div>
+                  </div>
+                  <p style={{ fontSize: '13.5px', color: T.text2, lineHeight: 1.65, marginBottom: '20px' }}>
+                    All your meetings, summaries, action items, and workspaces will be permanently deleted.
+                    Type <strong style={{ color: T.danger }}>DELETE</strong> to confirm.
+                  </p>
+                  <input
+                    value={deleteConfirm}
+                    onChange={e => setDeleteConfirm(e.target.value)}
+                    placeholder="Type DELETE to confirm"
+                    style={{
+                      width: '100%', padding: '10px 13px',
+                      borderRadius: '9px', marginBottom: '16px',
+                      border: `1px solid ${deleteConfirm === 'DELETE' ? T.danger : T.border}`,
+                      background: T.surface2, color: T.text,
+                      fontSize: '14px', outline: 'none', fontFamily: 'var(--font)',
+                    }}
+                  />
+                  <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+                    <Button variant="ghost" onClick={() => { setShowDeleteModal(false); setDeleteConfirm('') }}>
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={handleDeleteAccount}
+                      loading={deleting}
+                      disabled={deleteConfirm !== 'DELETE'}
+                      style={{
+                        background: T.danger, borderColor: T.danger,
+                        opacity: deleteConfirm !== 'DELETE' ? 0.5 : 1,
+                      }}
+                    >
+                      Delete My Account
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </SettingsSection>
 

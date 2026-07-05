@@ -2,9 +2,10 @@
 
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Mic, ArrowRight, AlertCircle, CheckCircle, ArrowLeft } from 'lucide-react'
+import { ArrowRight, AlertCircle, CheckCircle, ArrowLeft } from 'lucide-react'
 import { useTheme } from '../ThemeContext'
 import { apiForgotPassword } from '../api/client'
+import Logo from '../components/Logo'
 
 export default function ForgotPassword() {
   const { T } = useTheme()
@@ -35,25 +36,12 @@ export default function ForgotPassword() {
     }}>
       <div className="anim-fade-up" style={{ width: '100%', maxWidth: '400px' }}>
 
-        {/* Logo */}
+        {/* Logo — was a mic icon, now the same waveform mark used app-wide */}
         <div style={{
           display: 'flex', alignItems: 'center',
-          justifyContent: 'center', gap: '10px',
-          marginBottom: '36px',
+          justifyContent: 'center', marginBottom: '36px',
         }}>
-          <div style={{
-            width: '40px', height: '40px', borderRadius: '11px',
-            background: T.btnGrad, boxShadow: T.btnShadow,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <Mic size={20} color="#fff" strokeWidth={2.5} />
-          </div>
-          <span style={{
-            fontSize: '22px', fontWeight: 800,
-            letterSpacing: '-0.04em', color: T.text,
-          }}>
-            Summly
-          </span>
+          <Logo size={40} wordmarkSize={22} />
         </div>
 
         <div style={{

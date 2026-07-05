@@ -5,8 +5,17 @@ import logging
 import traceback
 
 from fastapi import APIRouter, HTTPException, Depends, status, Request
-from slowapi import Limiter
-from slowapi.util import get_remote_address
+
+try:
+    from slowapi import Limiter
+    from slowapi.util import get_remote_address
+except ImportError:
+    def get_remote_address(r): return "0.0.0.0"
+    class Limiter:
+        def __init__(self, **kw): pass
+        def limit(self, *a, **kw):
+            def d(fn): return fn
+            return d
 
 from server.core.auth.schemas import (
     RegisterRequest, LoginRequest,

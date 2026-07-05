@@ -209,7 +209,12 @@ summary = {
     "overall_avg":      round((faith_avg+relev_avg+recall_avg)/3, 4),
     "num_questions":    len(valid),
     "meeting_id":       MEETING_ID,
-    "judge_model":      "gpt-4o-mini",
+    # FIX: was hardcoded "gpt-4o-mini" — a leftover from before the judge
+    # LLM was switched to Groq (see judge_llm above). score_answers.py
+    # already had this corrected; run_eval.py hadn't been, so a fresh run
+    # of this script would have silently mislabeled its own output.
+    "judge_model":      "groq/llama-3.3-70b-versatile",
+    "embedding_model":  "sentence-transformers/all-MiniLM-L6-v2",
     "data_type":        "real_summly_answers",
 }
 with open(os.path.join(out_dir, "summary_scores.json"), "w") as f:

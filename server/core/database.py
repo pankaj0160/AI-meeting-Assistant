@@ -286,7 +286,122 @@ def init_db():
             ON meeting_titles (meeting_id)
         """)
 
+        # ── Row Level Security ───────────────────────────────────────────────
+        # FIX: Supabase's security Advisor flags every public table without
+        # RLS as CRITICAL — Supabase auto-exposes a REST API (PostgREST) over
+        # the whole public schema, gated only by an `anon` API key that's
+        # meant to be public. Without RLS, anyone with that key can read/
+        # write these tables directly, bypassing this app's auth entirely.
+        #
+        # This app connects via DATABASE_URL as the `postgres` role (see
+        # get_connection() above), not through PostgREST — and Postgres RLS
+        # never applies to the table owner/superuser regardless of policies.
+        # So enabling RLS here has zero effect on this app; it only closes
+        # the separate, unused PostgREST attack surface. Also mirrored as a
+        # standalone script at migrations/enable_rls.sql for running
+        # directly in the Supabase SQL Editor against an existing database
+        # (this block only helps on the NEXT fresh `init_db()` run, e.g. a
+        # new environment or a teammate's local setup).
+        for table in (
+            "users", "password_reset_tokens", "meetings", "meeting_summaries",
+            "action_items", "decisions", "topics", "meeting_health",
+            "meeting_quotes", "meeting_titles", "meeting_diarization",
+            "meeting_sentiment", "workspaces", "workspace_meetings",
+            "workspace_members", "webhook_endpoints", "webhook_events",
+            "audit_logs",
+        ):
+            cur.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")
+
         logger.info("✓ Database tables and indexes verified / created")
+
+def get_analytics_data(user_id: int) -> dict:
+    """
+    Single query that returns everything the Analytics page needs.
+    Replaces the old N+1 loop (getMeetings + getMeetingIntelligence per meeting).
+
+    Returns:
+      - total counts (meetings, decisions, actions, topics)
+      - weekly_trend: meetings per day for last 30 days
+      - task_status_breakdown: open/in_progress/done counts
+      - top_topics: most frequent topic titles across all meetings
+      - health_trend: health scores over time (last 10 meetings)
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        # 1 — totals (reuses same pattern as get_user_stats)
+        cur.execute("""
+            SELECT
+                COUNT(DISTINCT m.id)  AS total_meetings,
+                COUNT(DISTINCT d.id)  AS total_decisions,
+                COUNT(DISTINCT ai.id) AS total_actions,
+                COUNT(DISTINCT t.id)  AS total_topics
+            FROM meetings m
+            LEFT JOIN decisions    d  ON d.meeting_id  = m.id
+            LEFT JOIN action_items ai ON ai.meeting_id = m.id
+            LEFT JOIN topics       t  ON t.meeting_id  = m.id
+            WHERE m.user_id = %s
+        """, (user_id,))
+        totals = dict(cur.fetchone() or {})
+
+        # 2 — meetings per day for last 30 days
+        cur.execute("""
+            SELECT
+                DATE(created_at)::text AS day,
+                COUNT(*)               AS count
+            FROM meetings
+            WHERE user_id = %s
+              AND created_at >= NOW() - INTERVAL '30 days'
+            GROUP BY DATE(created_at)
+            ORDER BY day ASC
+        """, (user_id,))
+        weekly_trend = [dict(r) for r in cur.fetchall()]
+
+        # 3 — task status breakdown
+        cur.execute("""
+            SELECT ai.status, COUNT(*) AS count
+            FROM action_items ai
+            JOIN meetings m ON m.id = ai.meeting_id
+            WHERE m.user_id = %s
+            GROUP BY ai.status
+        """, (user_id,))
+        task_rows = cur.fetchall()
+        task_status = {r['status']: r['count'] for r in task_rows}
+
+        # 4 — top 8 topics by frequency
+        cur.execute("""
+            SELECT t.title, COUNT(*) AS count
+            FROM topics t
+            JOIN meetings m ON m.id = t.meeting_id
+            WHERE m.user_id = %s
+            GROUP BY t.title
+            ORDER BY count DESC
+            LIMIT 8
+        """, (user_id,))
+        top_topics = [dict(r) for r in cur.fetchall()]
+
+        # 5 — health score trend (last 10 meetings that have health data)
+        cur.execute("""
+            SELECT
+                m.filename,
+                DATE(m.created_at)::text AS day,
+                mh.overall_score
+            FROM meeting_health mh
+            JOIN meetings m ON m.id = mh.meeting_id
+            WHERE m.user_id = %s
+            ORDER BY m.created_at DESC
+            LIMIT 10
+        """, (user_id,))
+        health_trend = [dict(r) for r in reversed(cur.fetchall())]
+
+    return {
+        "totals":       totals,
+        "weekly_trend": weekly_trend,
+        "task_status":  task_status,
+        "top_topics":   top_topics,
+        "health_trend": health_trend,
+    }
+
 
 # =============================================================================
 # MEETINGS
@@ -543,18 +658,119 @@ def get_meeting_by_id(meeting_id: int, user_id: int = None) -> dict | None:
 
 
 def get_all_meetings_for_indexing(user_id: int = None) -> list[dict]:
-    """Fetch all meetings for RAG indexing."""
+    """
+    Fetch all meetings for RAG indexing.
+
+    FIX: this previously did NOT select `user_id` at all — every caller
+    that reindexes meetings (POST /rag/reindex and the reindex job) reads
+    `m.get("user_id")` expecting it to be here, got None every time, and
+    that None became a `user_id: 0` ("unknown owner") tag on every chunk
+    in ChromaDB. That's the root cause of why user-scoped chat filtering
+    had to special-case user_id=0 as legacy data — the reindex path meant
+    to populate it correctly was never actually doing so. Fixed here so
+    reindexing now correctly restores real ownership on every chunk.
+    """
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         if user_id is not None:
             cur.execute(
-                "SELECT id, filename, transcript, created_at FROM meetings WHERE user_id = %s ORDER BY id ASC",
+                "SELECT id, filename, transcript, created_at, user_id FROM meetings WHERE user_id = %s ORDER BY id ASC",
                 (user_id,),
             )
         else:
-            cur.execute("SELECT id, filename, transcript, created_at FROM meetings ORDER BY id ASC")
+            cur.execute("SELECT id, filename, transcript, created_at, user_id FROM meetings ORDER BY id ASC")
         rows = cur.fetchall()
         return [dict(r) for r in rows if r["transcript"]]
+
+
+# FIX: There was previously no way to delete a single meeting anywhere in
+# the app — not in the API, not in the frontend. The only option was to
+# delete the row directly in Supabase, which:
+#   1. Leaves every derived-intelligence row (summaries, action items,
+#      decisions, topics, health score, quotes, title, diarization) behind
+#      as an orphan, since none of those tables cascade on `meetings`
+#      deletion except workspace_meetings and meeting_sentiment.
+#   2. Never touches ChromaDB at all — Chroma is a completely separate
+#      datastore from Postgres, so a Supabase-side delete can't cascade
+#      into it. The meeting's transcript chunks stay indexed forever,
+#      under the same meeting_id.
+#   3. Since Postgres's own id sequence eventually gets reused if the table
+#      is ever truncated/reseeded, a *future* meeting can be assigned that
+#      same id — and its chat will then silently retrieve the old deleted
+#      meeting's orphaned chunks alongside its own, because ChromaDB has no
+#      way to know the old meeting_id's owner changed.
+#
+# This function handles the Postgres side correctly (all child tables,
+# in one transaction). The caller (DELETE /meetings/{id} in main.py) is
+# responsible for also purging ChromaDB via delete_meeting_index() and
+# clearing the BM25 cache via invalidate_meeting_cache() — this module
+# doesn't import from core.rag to avoid a circular/heavy dependency.
+def delete_meeting(meeting_id: int, user_id: int) -> bool:
+    """
+    Permanently delete a meeting and everything derived from it in Postgres.
+
+    Returns False (and deletes nothing) if the meeting doesn't exist or
+    isn't owned by user_id — never reveals whether an id exists to a
+    non-owner.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor()
+
+        cur.execute(
+            "SELECT id FROM meetings WHERE id = %s AND user_id = %s",
+            (meeting_id, user_id),
+        )
+        if cur.fetchone() is None:
+            return False
+
+        # These tables reference meetings(id) WITHOUT on delete cascade,
+        # so they must be cleared explicitly or the final DELETE below
+        # would fail with a foreign-key violation.
+        for table in (
+            "meeting_summaries", "action_items", "decisions", "topics",
+            "meeting_health", "meeting_quotes", "meeting_titles",
+            "meeting_diarization",
+        ):
+            cur.execute(f"DELETE FROM {table} WHERE meeting_id = %s", (meeting_id,))
+
+        # workspace_meetings and meeting_sentiment DO cascade automatically.
+        cur.execute("DELETE FROM meetings WHERE id = %s", (meeting_id,))
+        return True
+
+
+def get_all_meeting_ids() -> list[int]:
+    """
+    Every meeting id currently in Postgres, across ALL users.
+
+    Used exclusively for reconciling ChromaDB against Postgres (see
+    core.rag.indexer.find_orphaned_meeting_ids). Meeting ids are globally
+    unique (a single SERIAL sequence, not per-user), so "does this id
+    exist at all" is the same question regardless of which user is asking
+    — there's no per-user narrowing to do here. No meeting content is
+    read or returned, just bare ids.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM meetings")
+        return [row[0] for row in cur.fetchall()]
+
+
+def get_meeting_owner_map() -> dict[int, int]:
+    """
+    { meeting_id: user_id } for every meeting in Postgres.
+
+    Used to backfill ChromaDB chunks that were indexed before user_id was
+    reliably threaded through the indexing pipeline (see the FIX notes on
+    get_all_meetings_for_indexing and the two index_meeting() call sites
+    in main.py that used to omit user_id entirely). Those chunks are
+    tagged `user_id: 0`; this map lets us look up their real owner by
+    meeting_id and correct the tag in place. Like get_all_meeting_ids(),
+    this is bare ids only — no meeting content.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id, user_id FROM meetings")
+        return {row[0]: row[1] for row in cur.fetchall()}
 
 
 # =============================================================================
@@ -932,7 +1148,7 @@ def _init_workspace_tables(conn) -> None:
             name        TEXT        NOT NULL,
             description TEXT,
             type        TEXT        NOT NULL DEFAULT 'individual',
-            color       TEXT                 DEFAULT '#6366f1',
+            color       TEXT                 DEFAULT '#10b981',
             created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
@@ -1003,7 +1219,7 @@ def _init_week6_tables(cur) -> None:
             description TEXT    DEFAULT '',
             type        TEXT    NOT NULL DEFAULT 'individual'
                         CHECK (type IN ('individual', 'project')),
-            color       TEXT    DEFAULT '#6366f1',
+            color       TEXT    DEFAULT '#10b981',
             created_at  TIMESTAMPTZ DEFAULT NOW(),
             updated_at  TIMESTAMPTZ DEFAULT NOW()
         )
@@ -1092,7 +1308,7 @@ def create_workspace(
     name:        str,
     description: str = "",
     type:        str = "individual",
-    color:       str = "#6366f1",
+    color:       str = "#10b981",
 ) -> dict:
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)

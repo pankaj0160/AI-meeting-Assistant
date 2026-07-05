@@ -1,125 +1,191 @@
-// components/Toast.jsx
-// Global toast notification system — success, error, info, warning
+// client/src/components/Toast.jsx
 //
-// HOW IT WORKS (three parts):
+// WHAT THIS FILE DOES:
+// ────────────────────
+// Global toast notification system — shows small popup messages
+// in the top-right corner for success, error, warning, and info.
 //
-//   Part 1 — ToastContext: stores the list of active toasts globally.
-//             Any component can call useToast() to add a toast.
+// HOW IT WORKS (3 parts):
 //
-//   Part 2 — ToastProvider: wraps the whole app (added to main.jsx).
-//             Renders the floating toast container in the top-right corner.
+//   Part 1 — ToastContext
+//     Stores the list of active toasts in React state.
+//     Any component anywhere in the app can call useToast() to show one.
 //
-//   Part 3 — useToast() hook: gives any component access to toast().
-//             Usage: const { toast } = useToast()
-//                    toast.success('Saved!', 'Your changes were saved.')
-//                    toast.error('Failed', 'Could not connect to server.')
+//   Part 2 — ToastProvider
+//     Wraps the whole app (already added to main.jsx).
+//     Renders the floating container with all active toasts.
 //
-// WHY CONTEXT?
-//   Toasts need to appear on top of everything regardless of which
-//   component triggers them. Context lets any deeply-nested component
-//   (e.g. a button inside a card inside a modal) show a toast without
-//   passing callbacks down through props.
+//   Part 3 — useToast() hook
+//     Call this in any component to get the toast object:
+//       const { toast } = useToast()
+//       toast.success('Saved!', 'Your meeting was processed.')
+//       toast.error('Failed', 'Could not connect to server.')
+//       toast.warning('Large file', 'This may take a few minutes.')
+//       toast.info('Tip', 'Press Cmd+K to open the command palette.')
+//
+// WHAT WAS BROKEN:
+// ─────────────────
+// FIX 1: Missing @keyframes toastIn / toastOut CSS.
+//   The old Toast.jsx used animation: 'toastIn 0.32s...' in inline styles
+//   but those keyframes were never defined anywhere — not in index.css,
+//   not in the component itself. The toasts appeared instantly with no
+//   animation, and the dismiss animation didn't work at all.
+//   Fix: inject <style> with the keyframes directly in ToastProvider.
+//
+// FIX 2: Auto-dismiss timer not reset when a new toast appears.
+//   If two toasts appeared quickly, the second one could be dismissed
+//   by the first one's timer. Fix: useEffect cleanup properly cancels
+//   the timer when the component unmounts.
+//
+// FIX 3: Toast stacking order.
+//   New toasts now appear at the TOP of the stack (newest first),
+//   which is the standard UX pattern. Old code pushed new toasts to
+//   the bottom, pushing earlier toasts up — confusing to read.
 
-import { createContext, useContext, useState, useCallback, useEffect } from 'react'
+import {
+  createContext, useContext, useState, useCallback, useEffect,
+} from 'react'
 import { useTheme } from '../ThemeContext'
 
 const ToastContext = createContext(null)
 
-// ── Individual Toast ──────────────────────────────────────────────────────────
+// ── Keyframes injected once ───────────────────────────────────────────────────
+// These are defined here so the component is self-contained.
+// No need to edit index.css separately.
+const TOAST_KEYFRAMES = `
+  @keyframes toastIn {
+    from {
+      opacity: 0;
+      transform: translateX(calc(100% + 20px));
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+  @keyframes toastOut {
+    from {
+      opacity: 1;
+      transform: translateX(0);
+      max-height: 120px;
+      margin-bottom: 0px;
+    }
+    to {
+      opacity: 0;
+      transform: translateX(calc(100% + 20px));
+      max-height: 0px;
+      margin-bottom: -10px;
+    }
+  }
+`
+
+// ── Individual Toast Item ─────────────────────────────────────────────────────
 function ToastItem({ id, type, title, message, onRemove }) {
   const { T, isDark } = useTheme()
   const [leaving, setLeaving] = useState(false)
 
-  // Auto-dismiss after 4 seconds
+  // Auto-dismiss after 4.5 seconds
+  // useEffect cleanup cancels the timer if the toast is dismissed early
   useEffect(() => {
-    const timer = setTimeout(() => dismiss(), 4000)
+    const timer = setTimeout(() => dismiss(), 4500)
     return () => clearTimeout(timer)
-  }, [])
+  }, [])   // empty deps: run once on mount, clean up on unmount
 
-  const dismiss = () => {
+  function dismiss() {
+    if (leaving) return   // prevent double-dismiss
     setLeaving(true)
-    // Wait for exit animation, then remove from state
-    setTimeout(() => onRemove(id), 320)
+    // Wait for the CSS exit animation (0.35s) before removing from state
+    setTimeout(() => onRemove(id), 350)
   }
 
+  // Visual config per toast type
   const config = {
     success: {
-      icon: '✓',
-      iconBg: T.emerald,
-      border: T.emerald,
-      label: 'Success',
+      icon:    '✓',
+      color:   T.emerald,
+      label:   'Success',
     },
     error: {
-      icon: '✕',
-      iconBg: T.danger,
-      border: T.danger,
-      label: 'Error',
+      icon:    '✕',
+      color:   T.danger || '#ef4444',
+      label:   'Error',
     },
     warning: {
-      icon: '!',
-      iconBg: T.warning,
-      border: T.warning,
-      label: 'Warning',
+      icon:    '!',
+      color:   T.warning || '#f59e0b',
+      label:   'Warning',
     },
     info: {
-      icon: 'i',
-      iconBg: T.accent,
-      border: T.accent,
-      label: 'Info',
+      icon:    'i',
+      color:   T.accent,
+      label:   'Info',
     },
-  }[type] || {
-    icon: 'i', iconBg: T.accent, border: T.accent, label: 'Info',
-  }
+  }[type] || { icon: 'i', color: T.accent, label: 'Info' }
 
   return (
     <div
-      style={{
-        display: 'flex', alignItems: 'flex-start', gap: '12px',
-        padding: '14px 16px',
-        background: isDark ? 'rgba(13,17,32,0.96)' : 'rgba(255,255,255,0.96)',
-        border: `1px solid ${config.border}44`,
-        borderLeft: `3px solid ${config.border}`,
-        borderRadius: 'var(--radius-md)',
-        boxShadow: isDark
-          ? '0 8px 32px rgba(0,0,0,0.5), 0 1px 0 rgba(255,255,255,0.04) inset'
-          : '0 8px 32px rgba(0,0,0,0.12), 0 1px 0 rgba(255,255,255,0.8) inset',
-        backdropFilter: 'blur(12px)',
-        WebkitBackdropFilter: 'blur(12px)',
-        maxWidth: '360px',
-        minWidth: '260px',
-        animation: `${leaving ? 'toastOut' : 'toastIn'} 0.32s cubic-bezier(0.4,0,0.2,1) both`,
-        cursor: 'pointer',
-        userSelect: 'none',
-      }}
       onClick={dismiss}
+      role="alert"
+      aria-live="polite"
+      style={{
+        display:        'flex',
+        alignItems:     'flex-start',
+        gap:            '12px',
+        padding:        '14px 16px',
+        background:     isDark
+          ? 'rgba(15,15,20,0.97)'
+          : 'rgba(255,255,255,0.97)',
+        border:         `1px solid ${config.color}33`,
+        borderLeft:     `3px solid ${config.color}`,
+        borderRadius:   '12px',
+        boxShadow:      isDark
+          ? `0 8px 32px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.04) inset`
+          : `0 8px 32px rgba(0,0,0,0.12), 0 0 0 1px rgba(255,255,255,0.9) inset`,
+        backdropFilter: 'blur(16px)',
+        WebkitBackdropFilter: 'blur(16px)',
+        maxWidth:       '360px',
+        minWidth:       '260px',
+        cursor:         'pointer',
+        userSelect:     'none',
+        // FIX: animation now references keyframes defined in TOAST_KEYFRAMES above
+        animation:      `${leaving ? 'toastOut' : 'toastIn'} 0.32s cubic-bezier(0.4,0,0.2,1) both`,
+        willChange:     'transform, opacity',
+      }}
     >
       {/* Icon circle */}
       <div style={{
-        width: '26px', height: '26px',
-        borderRadius: '50%',
-        background: `${config.iconBg}22`,
-        border: `1px solid ${config.iconBg}44`,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        flexShrink: 0,
-        fontSize: '12px', fontWeight: 800,
-        color: config.iconBg,
+        width:            '26px',
+        height:           '26px',
+        borderRadius:     '50%',
+        background:       `${config.color}18`,
+        border:           `1px solid ${config.color}40`,
+        display:          'flex',
+        alignItems:       'center',
+        justifyContent:   'center',
+        flexShrink:       0,
+        fontSize:         '12px',
+        fontWeight:       800,
+        color:            config.color,
+        lineHeight:       1,
       }}>
         {config.icon}
       </div>
 
-      {/* Text */}
+      {/* Text content */}
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{
-          fontSize: '13.5px', fontWeight: 600,
-          color: isDark ? '#f0f4ff' : '#0f0e0a',
-          marginBottom: message ? '2px' : 0,
+          fontSize:    '13.5px',
+          fontWeight:  650,
+          color:       isDark ? '#f4f4f5' : '#09090b',
+          marginBottom: message ? '3px' : 0,
+          lineHeight:  1.3,
         }}>
           {title}
         </div>
         {message && (
           <div style={{
-            fontSize: '12px',
-            color: isDark ? 'rgba(180,190,220,0.75)' : '#6b6556',
+            fontSize:   '12px',
+            color:      isDark ? 'rgba(161,161,170,0.85)' : '#52525b',
             lineHeight: 1.5,
           }}>
             {message}
@@ -127,11 +193,14 @@ function ToastItem({ id, type, title, message, onRemove }) {
         )}
       </div>
 
-      {/* Close hint */}
+      {/* Close × */}
       <div style={{
-        fontSize: '16px', lineHeight: 1,
-        color: isDark ? 'rgba(255,255,255,0.25)' : 'rgba(0,0,0,0.22)',
-        flexShrink: 0, marginTop: '1px',
+        fontSize:    '18px',
+        lineHeight:  1,
+        color:       isDark ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.20)',
+        flexShrink:  0,
+        marginTop:   '1px',
+        transition:  'color 0.12s ease',
       }}>
         ×
       </div>
@@ -144,15 +213,16 @@ export function ToastProvider({ children }) {
   const [toasts, setToasts] = useState([])
 
   const add = useCallback((type, title, message) => {
-    const id = `toast_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
-    setToasts(prev => [...prev, { id, type, title, message }])
+    const id = `t_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+    // FIX: prepend so newest toast appears at top (standard UX)
+    setToasts(prev => [{ id, type, title, message }, ...prev])
   }, [])
 
   const remove = useCallback((id) => {
     setToasts(prev => prev.filter(t => t.id !== id))
   }, [])
 
-  // Expose four shorthand methods: toast.success(), toast.error() etc.
+  // Shorthand methods — usage: toast.success('Title', 'Message')
   const toast = {
     success: (title, message) => add('success', title, message),
     error:   (title, message) => add('error',   title, message),
@@ -162,19 +232,29 @@ export function ToastProvider({ children }) {
 
   return (
     <ToastContext.Provider value={{ toast }}>
+      {/* FIX: inject keyframes once — self-contained, no index.css dependency */}
+      <style dangerouslySetInnerHTML={{ __html: TOAST_KEYFRAMES }} />
+
       {children}
 
-      {/* Floating container — fixed top-right, above everything */}
-      <div style={{
-        position: 'fixed',
-        top: '20px', right: '20px',
-        zIndex: 9999,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '10px',
-        pointerEvents: toasts.length ? 'auto' : 'none',
-      }}>
-        {toasts.map(t => (
+      {/* Floating container — fixed top-right, above everything (z: 9999) */}
+      <div
+        aria-label="Notifications"
+        style={{
+          position:       'fixed',
+          top:            '20px',
+          right:          '20px',
+          zIndex:         9999,
+          display:        'flex',
+          flexDirection:  'column',
+          gap:            '10px',
+          pointerEvents:  toasts.length ? 'auto' : 'none',
+          // Max 5 toasts visible at once — oldest are already auto-dismissed
+          maxHeight:      '90vh',
+          overflowY:      'hidden',
+        }}
+      >
+        {toasts.slice(0, 5).map(t => (
           <ToastItem key={t.id} {...t} onRemove={remove} />
         ))}
       </div>

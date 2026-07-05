@@ -57,10 +57,22 @@ export function PageHeader({ title, subtitle, action, eyebrow }) {
 // Standard surface card with optional hover lift
 export function Card({ children, style = {}, hoverable = false, onClick }) {
   const { T } = useTheme()
+  // A div with onClick and nothing else is invisible to keyboard/screen-reader
+  // users — no tab stop, no way to activate it, no announced role. Card is
+  // used as a clickable surface throughout the app (meeting cards, stat
+  // cards), so this fix has app-wide reach.
+  const a11yProps = onClick ? {
+    role: 'button',
+    tabIndex: 0,
+    onKeyDown: (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(e) }
+    },
+  } : {}
   return (
     <div
       onClick={onClick}
       className={onClick ? 'press' : ''}
+      {...a11yProps}
       style={{
         background: T.surface,
         border: `1px solid ${T.border}`,
@@ -73,14 +85,16 @@ export function Card({ children, style = {}, hoverable = false, onClick }) {
       }}
       onMouseEnter={e => {
         if (hoverable || onClick) {
-          e.currentTarget.style.boxShadow = T.cardShadowHover
+          // No shadow-grow on hover — the guide calls this out specifically
+          // as the most overused, templated micro-interaction in AI-generated
+          // UI. Border + a 1px lift reads as considered; a bigger shadow
+          // reads as a default someone left in.
           e.currentTarget.style.borderColor = T.border2
-          e.currentTarget.style.transform = 'translateY(-2px)'
+          e.currentTarget.style.transform = 'translateY(-1px)'
         }
       }}
       onMouseLeave={e => {
         if (hoverable || onClick) {
-          e.currentTarget.style.boxShadow = T.cardShadow
           e.currentTarget.style.borderColor = T.border
           e.currentTarget.style.transform = 'translateY(0)'
         }
@@ -96,19 +110,27 @@ export function Card({ children, style = {}, hoverable = false, onClick }) {
 // backdrop-filter blurs what is BEHIND the element, creating depth layering
 export function GlassCard({ children, style = {}, onClick }) {
   const { T, isDark } = useTheme()
+  const a11yProps = onClick ? {
+    role: 'button',
+    tabIndex: 0,
+    onKeyDown: (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(e) }
+    },
+  } : {}
   return (
     <div
       onClick={onClick}
       className="glass press"
+      {...a11yProps}
       style={{
         background: isDark
           ? 'rgba(13,17,32,0.72)'
           : 'rgba(255,255,255,0.72)',
-        border: `1px solid ${isDark ? 'rgba(99,102,241,0.18)' : 'rgba(99,102,241,0.16)'}`,
+        border: `1px solid ${isDark ? 'rgba(16,185,129,0.16)' : 'rgba(5,150,105,0.14)'}`,
         borderRadius: 'var(--radius-xl)',
         boxShadow: isDark
           ? '0 8px 40px rgba(0,0,0,0.45), 0 1px 0 rgba(255,255,255,0.04) inset'
-          : '0 8px 32px rgba(99,102,241,0.10), 0 1px 0 rgba(255,255,255,0.8) inset',
+          : '0 8px 32px rgba(5,150,105,0.08), 0 1px 0 rgba(255,255,255,0.8) inset',
         padding: '28px',
         transition: 'box-shadow var(--speed) var(--ease), transform var(--speed) var(--ease)',
         cursor: onClick ? 'pointer' : 'default',
@@ -118,8 +140,8 @@ export function GlassCard({ children, style = {}, onClick }) {
         if (onClick) {
           e.currentTarget.style.transform = 'translateY(-2px)'
           e.currentTarget.style.boxShadow = isDark
-            ? '0 12px 48px rgba(0,0,0,0.55), 0 0 0 1px rgba(99,102,241,0.25)'
-            : '0 12px 40px rgba(99,102,241,0.18), 0 0 0 1px rgba(99,102,241,0.20)'
+            ? '0 12px 48px rgba(0,0,0,0.55), 0 0 0 1px rgba(16,185,129,0.22)'
+            : '0 12px 40px rgba(5,150,105,0.16), 0 0 0 1px rgba(5,150,105,0.18)'
         }
       }}
       onMouseLeave={e => {
@@ -127,7 +149,7 @@ export function GlassCard({ children, style = {}, onClick }) {
           e.currentTarget.style.transform = 'translateY(0)'
           e.currentTarget.style.boxShadow = isDark
             ? '0 8px 40px rgba(0,0,0,0.45), 0 1px 0 rgba(255,255,255,0.04) inset'
-            : '0 8px 32px rgba(99,102,241,0.10), 0 1px 0 rgba(255,255,255,0.8) inset'
+            : '0 8px 32px rgba(5,150,105,0.08), 0 1px 0 rgba(255,255,255,0.8) inset'
         }
       }}
     >
@@ -189,10 +211,13 @@ export function StatCard({ label, value, icon, color, bg, delay = 0, trend }) {
             }}>
               {label}
             </div>
-            {/* Number with count-up */}
+            {/* Number with count-up — Fraunces display face, per typography pass:
+                dashboard stat numbers are the "big number" moment where the
+                display face should show up, not just page titles. */}
             <div style={{
-              fontSize: '38px', fontWeight: 800,
-              letterSpacing: '-0.04em', lineHeight: 1,
+              fontFamily: 'var(--font-display, var(--font))',
+              fontSize: '38px', fontWeight: 600,
+              letterSpacing: '-0.02em', lineHeight: 1,
               color: T.text,
               fontVariantNumeric: 'tabular-nums',
             }}>
@@ -314,7 +339,11 @@ export function Badge({ children, color, bg, dot = false }) {
       display: 'inline-flex', alignItems: 'center', gap: '5px',
       padding: '3px 10px',
       borderRadius: '99px',
-      fontSize: '11.5px', fontWeight: 600,
+      // Mono face for badges/tags — ties short-label UI chrome back to
+      // the product's actual material (timestamped, structured meeting data)
+      // instead of reading as generic pill-shaped UI decoration.
+      fontFamily: 'var(--font-mono, var(--font))',
+      fontSize: '11px', fontWeight: 500,
       letterSpacing: '0.02em',
       color, background: bg,
     }}>
@@ -409,7 +438,15 @@ export function Button({
       }}
     >
       {loading
-        ? <span className="spinner" style={{ width: 14, height: 14 }} />
+        // Waveform-bar spinner instead of a generic circular one — this
+        // .waveform-spinner CSS already existed in index.css but was never
+        // actually used anywhere. Free brand moment: every loading button
+        // now pulses with the same motif as the product's core material.
+        ? (
+          <span className="waveform-spinner" aria-hidden="true">
+            <span /><span /><span />
+          </span>
+        )
         : icon
       }
       {children}
@@ -418,6 +455,27 @@ export function Button({
 }
 
 // ── Empty State ───────────────────────────────────────────────────────────────
+// A flat-lined waveform sits behind the context icon on every empty state —
+// this is the "reuse brand material instead of a generic illustration" idea
+// from the guide. It's decorative-only (aria-hidden) and low-opacity so it
+// doesn't compete with the icon/copy, which stay page-specific and already
+// use in-product-voice copy (checked across all 13 call sites — genuinely
+// nothing generic like "No data" anywhere already).
+function EmptyStateWaveform({ T }) {
+  // 9 bars, flat/low amplitude — deliberately calmer than the loading
+  // spinner's pulse, since this represents "nothing here yet" rather than
+  // "something is happening."
+  const heights = [4, 7, 5, 10, 6, 11, 5, 8, 4]
+  return (
+    <svg width="140" height="24" viewBox="0 0 140 24" fill="none" aria-hidden="true"
+      style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)' }}>
+      {heights.map((h, i) => (
+        <rect key={i} x={i * 15 + 2} y={12 - h / 2} width="6" height={h} rx="3" fill={T.text4} />
+      ))}
+    </svg>
+  )
+}
+
 export function EmptyState({ icon, title, subtitle, action }) {
   const { T } = useTheme()
   return (
@@ -430,11 +488,19 @@ export function EmptyState({ icon, title, subtitle, action }) {
       }}
     >
       <div style={{
-        fontSize: '52px', marginBottom: '20px',
-        opacity: 0.45, lineHeight: 1,
-        filter: 'grayscale(20%)',
+        position: 'relative',
+        width: '140px', height: '52px',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        marginBottom: '20px',
       }}>
-        {icon}
+        <EmptyStateWaveform T={T} />
+        <div style={{
+          position: 'relative',
+          fontSize: '52px', lineHeight: 1,
+          opacity: 0.45, filter: 'grayscale(20%)',
+        }}>
+          {icon}
+        </div>
       </div>
       <div style={{
         fontSize: '19px', fontWeight: 700,
@@ -491,7 +557,8 @@ export function Tag({ children, color, bg }) {
       display: 'inline-block',
       padding: '4px 12px',
       borderRadius: '99px',
-      fontSize: '12px', fontWeight: 600,
+      fontFamily: 'var(--font-mono, var(--font))',
+      fontSize: '11.5px', fontWeight: 500,
       color: color || T.accentLight,
       background: bg || T.accentBg,
       border: `1px solid ${color || T.accent}22`,

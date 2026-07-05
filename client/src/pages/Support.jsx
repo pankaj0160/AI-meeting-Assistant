@@ -90,7 +90,7 @@ const FAQS = [
 function FaqItem({ q, a, T }) {
   const [open, setOpen] = useState(false)
   return (
-    <div style={{
+    <div className="page-enter" style={{
       borderBottom: `1px solid ${T.border}`,
     }}>
       <button

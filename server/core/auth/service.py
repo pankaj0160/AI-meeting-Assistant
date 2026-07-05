@@ -12,11 +12,32 @@ import secrets
 import traceback          # FIX: moved from inside authenticate_user() to top
 from typing import Optional
 
-from jose import jwt, JWTError
-from passlib.context import CryptContext
+try:
+    from jose import jwt, JWTError
+except ImportError:
+    raise ImportError(
+        "python-jose is not installed.\n"
+        "Run: pip install python-jose[cryptography]==3.5.0"
+    )
+
+try:
+    from passlib.context import CryptContext
+except ImportError:
+    raise ImportError(
+        "passlib is not installed.\n"
+        "Run: pip install passlib==1.7.4 bcrypt==4.0.1"
+    )
+
 from dotenv import load_dotenv
 
-import psycopg2.extras
+try:
+    import psycopg2.extras
+except ImportError:
+    raise ImportError(
+        "psycopg2 is not installed.\n"
+        "Run: pip install psycopg2-binary==2.9.10"
+    )
+
 from server.core.database import get_connection
 from server.core.auth.models import User
 

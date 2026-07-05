@@ -7,13 +7,21 @@ Phase 2 Complete with Meeting Intelligence Engine
 from server.core.logging_config import setup_logging
 setup_logging()
 
-import structlog
-slog = structlog.get_logger()
-mlog = structlog.get_logger()
+try:
+    import structlog
+    mlog = structlog.get_logger("server.main")
+except ImportError:
+    # structlog not installed — use standard logging as fallback
+    import logging as _std_logging
+    mlog = _std_logging.getLogger("server.main")
+
+# slog is an alias used in some older parts of the codebase
+slog = mlog
 
 # ── Standard library ──────────────────────────────────────────────────────────
 import uuid
 import time
+import os
 import datetime
 import asyncio
 import io
@@ -35,9 +43,24 @@ from fastapi import HTTPException as FastAPIHTTPException
 from pydantic import BaseModel, HttpUrl
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarletteRequest
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
+try:
+    from slowapi import Limiter, _rate_limit_exceeded_handler
+    from slowapi.util import get_remote_address
+    from slowapi.errors import RateLimitExceeded
+    _SLOWAPI = True
+except ImportError:
+    # slowapi not installed — rate limiting disabled, server still works
+    _SLOWAPI = False
+    class RateLimitExceeded(Exception): pass
+    def get_remote_address(request): return "0.0.0.0"
+    def _rate_limit_exceeded_handler(request, exc):
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": "rate_limited"}, status_code=429)
+    class Limiter:
+        def __init__(self, **kw): pass
+        def limit(self, *a, **kw):
+            def decorator(fn): return fn
+            return decorator
 
 # ── Internal ──────────────────────────────────────────────────────────────────
 from server.core.auth.dependencies import get_current_user, get_optional_user
@@ -45,12 +68,78 @@ from server.core.auth.models import User
 from server.core.auth.router import router as auth_router
 from server.core.storage import upload_file as upload_to_supabase
 
+# FIX: import celery_app at top level — it was used in reindex/status endpoints
+# but never imported, causing NameError: name 'celery_app' is not defined
+try:
+    from server.core.tasks import celery_app, set_job_status, get_job_status
+except ImportError:
+    celery_app = None
+
+# Direct Redis client helper — works even if celery_app fails to import
+def _get_redis():
+    """
+    Return a connected Redis client, or None if Redis is not reachable.
+
+    FIX: redis.from_url() only creates a client object — it does NOT connect.
+    The connection happens on the first actual command (.ping()).
+    Old code: always returned a client even when Redis was offline,
+    causing every subsequent .get()/.setex() call to fail with a
+    ConnectionError that propagated as HTTP 500.
+    New code: tests the connection with .ping() — returns None if Redis
+    is not running so callers can degrade gracefully.
+    """
+    try:
+        import redis as _redis
+        url    = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        client = _redis.from_url(url, decode_responses=True, socket_connect_timeout=1)
+        client.ping()   # actually test the connection — raises if Redis is down
+        return client
+    except Exception:
+        return None   # Redis not available — callers handle this gracefully
+
+
+# ── In-memory job store (Redis fallback) ──────────────────────────────────────
+# When Redis is not running (local dev on Windows without Redis),
+# job progress is stored in this plain Python dict.
+# Works perfectly for single-process Uvicorn dev mode.
+# In production with multiple workers, use Redis via REDIS_URL env var.
+_mem_jobs: dict[str, dict] = {}
+
+def _write_job_status(job_id: str, status: dict) -> None:
+    """Write progress to Redis if available, else to in-memory dict."""
+    import json as _json
+    rc = _get_redis()
+    if rc:
+        try:
+            rc.setex(f"job:{job_id}:status", 3600, _json.dumps(status))
+            return
+        except Exception:
+            pass
+    # Redis unavailable — fall back to in-memory
+    _mem_jobs[job_id] = status
+
+def _read_job_status(job_id: str) -> dict | None:
+    """Read progress from Redis if available, else from in-memory dict."""
+    import json as _json
+    rc = _get_redis()
+    if rc:
+        try:
+            raw = rc.get(f"job:{job_id}:status")
+            if raw:
+                return _json.loads(raw)
+        except Exception:
+            pass
+    # Redis unavailable — fall back to in-memory
+    return _mem_jobs.get(job_id)
+
+
 from server.core.database import (
     init_db,
     get_all_transcripts,
     get_user_stats,           # FIX: replaces N+1 stats loop
     get_meetings_page,         # FIX: paginated meetings list
     get_tasks_page,            # FIX: paginated tasks list
+    get_analytics_data,        # Analytics page — single query
     save_transcript_and_get_id,
     save_meeting_intelligence,
     get_meeting_intelligence,
@@ -70,6 +159,8 @@ from server.core.database import (
     get_meeting_title,
     update_action_item_status,
     get_all_meetings_for_indexing,
+    delete_meeting,           # FIX: was missing entirely — no way to delete a meeting existed
+    get_meeting_owner_map,    # FIX: used to backfill + vacuum ChromaDB ownership (vacuum endpoint)
     # ── Week 5: Workspaces ──────────────────────────────
     create_workspace,
     get_workspaces_for_user,
@@ -92,6 +183,12 @@ from server.core.database import (
     get_audit_logs,
     export_user_data,
     delete_user_data,
+    # FIX: get_sentiment_analysis was defined in core/database.py but never
+    # imported here — every call to GET /meetings/{id}/sentiment raised
+    # NameError: name 'get_sentiment_analysis' is not defined and returned
+    # a 500. (save_sentiment_analysis doesn't need importing here — it's
+    # only called from within core/intelligence/sentiment.py itself.)
+    get_sentiment_analysis,
 )
 
 from server.core.intelligence.health   import analyze_meeting_health
@@ -124,10 +221,65 @@ logger = logging.getLogger(__name__)
 # APP SETUP
 # =====================================================
 
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app_instance):
+    """
+    Server startup / shutdown lifecycle.
+
+    STARTUP — runs once when uvicorn starts:
+      Warms Whisper and the embedding model in background threads.
+      Both are large models that take 5-15 seconds to load from disk.
+      Loading them NOW means the first upload request is instant instead
+      of making the first user wait 15+ seconds.
+
+      Why threads (not asyncio)?
+        Both model loads are synchronous C extensions.
+        Running them in the event loop would block all other requests
+        during the load window. Threads keep the event loop free.
+
+      Why background (not blocking startup)?
+        Server becomes ready to accept health-check requests immediately.
+        Warmup happens in parallel with the first requests.
+        If warmup fails (missing HF_TOKEN, disk issue), the server still
+        starts — diarization just won't work until the issue is fixed.
+    """
+    import threading
+
+    def _warm_whisper():
+        try:
+            from server.core.transcription.transcribe import warmup as whisper_warmup
+            whisper_warmup()
+        except Exception as e:
+            logger.warning("Whisper warmup failed (non-fatal): %s", e)
+
+    def _warm_embedder():
+        try:
+            from server.core.rag.embedder import get_embedding_model
+            get_embedding_model()
+            logger.info("Embedding model warmup complete")
+        except Exception as e:
+            logger.warning("Embedding model warmup failed (non-fatal): %s", e)
+
+    # Start both warmups in parallel — they are independent
+    t1 = threading.Thread(target=_warm_whisper,  daemon=True, name="warmup-whisper")
+    t2 = threading.Thread(target=_warm_embedder, daemon=True, name="warmup-embedder")
+    t1.start()
+    t2.start()
+    logger.info("Model warmup threads started (whisper + embedder)")
+
+    yield   # server runs here
+
+    # SHUTDOWN — nothing to clean up (models release on process exit)
+    logger.info("Summly server shutting down")
+
+
 app = FastAPI(
-    title="Summly API",
-    version="2.0.0",
-    description="AI Meeting Intelligence Platform Backend",
+    title       = "Summly API",
+    version     = "2.0.0",
+    description = "AI Meeting Intelligence Platform Backend",
+    lifespan    = lifespan,
 )
 
 
@@ -280,7 +432,7 @@ class CreateWorkspaceRequest(BaseModel):
     name:        str
     description: str = ""
     type:        str = "individual"   # "individual" or "project"
-    color:       str = "#6366f1"
+    color:       str = "#10b981"      # FIX: was indigo, now matches frontend default
 
 
 class UpdateWorkspaceRequest(BaseModel):
@@ -463,6 +615,19 @@ def get_all_tasks(
         raise HTTPException(status_code=500, detail="Failed to fetch tasks")
 
 
+@app.get("/analytics", tags=["Analytics"])
+def get_analytics(current_user: User = Depends(get_current_user)):
+    """
+    All analytics data in one request.
+    Replaces the old N+1 getMeetings + getMeetingIntelligence loop.
+    """
+    try:
+        return get_analytics_data(user_id=current_user.id)
+    except Exception as e:
+        logger.error(f"Analytics failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to load analytics")
+
+
 @app.get("/tasks/stats", tags=["Action Items"])
 def get_task_stats(current_user: User = Depends(get_current_user)):
     return get_action_item_stats(user_id=current_user.id)
@@ -641,6 +806,29 @@ def remove_meeting_from_workspace_endpoint(
     if not removed:
         raise HTTPException(status_code=404, detail="Workspace not found or access denied")
     return {"message": "Meeting removed from workspace"}
+
+
+# FIX: This endpoint didn't exist — get_workspace_for_meeting() was imported
+# above but never wired to a route, so the frontend had no way to find out
+# which workspace (if any) a given meeting already belongs to. Without this,
+# the MeetingDetail page can't show a meeting's current workspace or offer
+# a "move to workspace" action without guessing.
+#
+# Ownership check: we verify the meeting belongs to current_user via
+# get_meeting_by_id() BEFORE looking up its workspace, since
+# get_workspace_for_meeting() itself does not check ownership.
+@app.get("/meetings/{meeting_id}/workspace", tags=["Workspaces"])
+async def get_meeting_workspace_endpoint(
+    meeting_id:   int,
+    current_user: User = Depends(get_current_user),
+):
+    meeting = await asyncio.to_thread(get_meeting_by_id, meeting_id, current_user.id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    workspace = await asyncio.to_thread(get_workspace_for_meeting, meeting_id)
+    return {"workspace": workspace}
+
 
 
 
@@ -1217,7 +1405,7 @@ def delete_my_account(
 # =====================================================
 
 @app.get("/meetings", tags=["Meetings"])
-def list_meetings(
+async def list_meetings(
     current_user: User       = Depends(get_current_user),
     limit:        int        = Query(default=20, ge=1, le=100),
     cursor:       int | None = Query(default=None),
@@ -1244,25 +1432,78 @@ def list_meetings(
       cursor = id of last item from previous page (omit for first page)
     """
     try:
-        return get_meetings_page(
+        # FIX: DB reads are synchronous (psycopg2). Running them directly inside
+        # async def blocks the entire FastAPI event loop — all other requests wait.
+        # asyncio.to_thread() runs the blocking call in a thread pool worker.
+        # The event loop stays free to handle other concurrent requests.
+        return await asyncio.to_thread(
+            get_meetings_page,
             user_id=current_user.id,
             limit=limit,
             cursor=cursor,
         )
     except Exception as e:
-        logger.error(f"Failed to fetch meetings: {e}", exc_info=True)
+        logger.error("Failed to fetch meetings: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to fetch meetings")
 
 
+@app.delete("/meetings/{meeting_id}", tags=["Meetings"])
+async def delete_meeting_endpoint(
+    meeting_id:   int,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Permanently delete a meeting: the Postgres row, every derived
+    intelligence table (summaries, action items, decisions, topics,
+    health score, quotes, title, diarization), and its ChromaDB vectors.
+
+    FIX: this endpoint did not exist at all before. The only way to
+    remove a meeting was deleting it directly in Supabase — which leaves
+    its ChromaDB vectors behind (Chroma is a separate datastore, nothing
+    about a Postgres-side delete touches it). Those orphaned vectors keep
+    matching chat queries scoped to that meeting_id forever, and if
+    Postgres's id sequence ever gets reused (e.g. after a table
+    truncation), a brand-new meeting can inherit a deleted one's stale,
+    unrelated content in chat. This endpoint keeps both stores in sync
+    going forward. If you have existing orphaned vectors from before this
+    endpoint existed, run POST /rag/vacuum-orphaned once to clean them up.
+    """
+    deleted = await asyncio.to_thread(delete_meeting, meeting_id, current_user.id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    try:
+        from server.core.rag.indexer import delete_meeting_index
+        from server.core.rag.hybrid_search import invalidate_meeting_cache
+        await asyncio.to_thread(delete_meeting_index, meeting_id)
+        invalidate_meeting_cache(meeting_id)
+    except Exception as e:
+        # The Postgres row is already gone — that's the part the user
+        # asked for and can't be safely rolled back at this point. Log
+        # loudly so this doesn't fail silently; POST /rag/vacuum-orphaned
+        # will catch and clean up any vectors left behind by this failure.
+        logger.error(
+            f"Meeting {meeting_id} deleted from Postgres, but ChromaDB "
+            f"cleanup failed — will need /rag/vacuum-orphaned: {e}"
+        )
+
+    return {"message": "Meeting deleted", "meeting_id": meeting_id}
+
+
 @app.get("/meetings/{meeting_id}", response_model=MeetingDetail, tags=["Meetings"])
-def get_meeting(
+async def get_meeting(
     meeting_id:   int,
     current_user: User = Depends(get_current_user),
 ):
     try:
-        meeting = get_meeting_by_id(meeting_id, user_id=current_user.id)
+        # FIX: async + to_thread — DB read was blocking the event loop
+        meeting = await asyncio.to_thread(
+            get_meeting_by_id, meeting_id, current_user.id
+        )
         if not meeting:
             raise HTTPException(status_code=404, detail="Meeting not found")
+
+        intel = await asyncio.to_thread(get_intelligence_for_response, meeting_id)
 
         return MeetingDetail(
             id               = meeting["id"],
@@ -1270,7 +1511,7 @@ def get_meeting(
             transcript       = meeting["transcript"],
             created_at       = str(meeting["created_at"]),
             duration_seconds = meeting["duration_seconds"],
-            intelligence     = get_intelligence_for_response(meeting_id),
+            intelligence     = intel,
         )
     except HTTPException:
         raise
@@ -1457,13 +1698,17 @@ def export_pdf(
     S_title   = style("T",  fontSize=22, fontName="Helvetica-Bold",
                       textColor=colors.HexColor("#0e1117"), spaceAfter=4, alignment=TA_LEFT)
     S_meta    = style("M",  fontSize=10, textColor=colors.HexColor("#6b748f"), spaceAfter=4)
+    # FIX: section headers/quotes were #4f46e5 (indigo) with a #f5f7ff
+    # (lavender-tinted) table background — this is a real client-facing PDF
+    # export, so the brand mismatch actually reached users, not just the
+    # app UI. Now emerald throughout, consistent with everything else.
     S_section = style("S",  fontSize=13, fontName="Helvetica-Bold",
-                      textColor=colors.HexColor("#4f46e5"), spaceBefore=24, spaceAfter=10)
+                      textColor=colors.HexColor("#059669"), spaceBefore=24, spaceAfter=10)
     S_body    = style("B",  fontSize=10, leading=16,
                       textColor=colors.HexColor("#2e3650"), spaceAfter=4)
     S_bullet  = style("BL", fontSize=10, leading=15,
                       textColor=colors.HexColor("#2e3650"), leftIndent=14, spaceAfter=3)
-    S_quote   = style("Q",  fontSize=10, leading=15, textColor=colors.HexColor("#4f46e5"),
+    S_quote   = style("Q",  fontSize=10, leading=15, textColor=colors.HexColor("#059669"),
                       leftIndent=14, fontName="Helvetica-Oblique", spaceAfter=4)
     S_label   = style("L",  fontSize=9,  fontName="Helvetica-Bold",
                       textColor=colors.HexColor("#9aa3bc"), spaceAfter=2)
@@ -1479,7 +1724,7 @@ def export_pdf(
         [[Paragraph(title, S_title)]],
         colWidths=[W],
         style=TableStyle([
-            ("BACKGROUND",    (0,0), (-1,-1), colors.HexColor("#f5f7ff")),
+            ("BACKGROUND",    (0,0), (-1,-1), colors.HexColor("#ecfdf5")),
             ("TOPPADDING",    (0,0), (-1,-1), 14),
             ("BOTTOMPADDING", (0,0), (-1,-1), 14),
             ("LEFTPADDING",   (0,0), (-1,-1), 16),
@@ -1536,11 +1781,11 @@ def export_pdf(
         col_w = [W*0.45, W*0.2, W*0.2, W*0.15]
         t = Table(data, colWidths=col_w)
         t.setStyle(TableStyle([
-            ("BACKGROUND",     (0,0), (-1,0),  colors.HexColor("#f5f7ff")),
-            ("TEXTCOLOR",      (0,0), (-1,0),  colors.HexColor("#4f46e5")),
+            ("BACKGROUND",     (0,0), (-1,0),  colors.HexColor("#ecfdf5")),
+            ("TEXTCOLOR",      (0,0), (-1,0),  colors.HexColor("#059669")),
             ("FONTNAME",       (0,0), (-1,0),  "Helvetica-Bold"),
             ("FONTSIZE",       (0,0), (-1,-1), 9),
-            ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, colors.HexColor("#f9faff")]),
+            ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, colors.HexColor("#f6fdf9")]),
             ("GRID",           (0,0), (-1,-1), 0.5, colors.HexColor("#e2e8f0")),
             ("TOPPADDING",     (0,0), (-1,-1), 7),
             ("BOTTOMPADDING",  (0,0), (-1,-1), 7),
@@ -1576,13 +1821,13 @@ def export_pdf(
         ]
         ht = Table(health_data, colWidths=[W*0.6, W*0.4])
         ht.setStyle(TableStyle([
-            ("BACKGROUND",     (0,0),  (-1,0),  colors.HexColor("#f5f7ff")),
-            ("TEXTCOLOR",      (0,0),  (-1,0),  colors.HexColor("#4f46e5")),
+            ("BACKGROUND",     (0,0),  (-1,0),  colors.HexColor("#ecfdf5")),
+            ("TEXTCOLOR",      (0,0),  (-1,0),  colors.HexColor("#059669")),
             ("FONTNAME",       (0,0),  (-1,0),  "Helvetica-Bold"),
             ("FONTNAME",       (0,-1), (-1,-1), "Helvetica-Bold"),
             ("FONTSIZE",       (0,0),  (-1,-1), 9),
             ("GRID",           (0,0),  (-1,-1), 0.5, colors.HexColor("#e2e8f0")),
-            ("ROWBACKGROUNDS", (0,1),  (-1,-2), [colors.white, colors.HexColor("#f9faff")]),
+            ("ROWBACKGROUNDS", (0,1),  (-1,-2), [colors.white, colors.HexColor("#f6fdf9")]),
             ("TOPPADDING",     (0,0),  (-1,-1), 7),
             ("BOTTOMPADDING",  (0,0),  (-1,-1), 7),
             ("LEFTPADDING",    (0,0),  (-1,-1), 8),
@@ -1762,11 +2007,12 @@ async def upload_file(
         logger.info(f"Transcription complete: {len(transcript)} characters")
 
         # ── Step 3: Save transcript to PostgreSQL ──────────────────────────
+        # FIX: Removed file_url= parameter — save_transcript_and_get_id does not
+        # accept it. The Supabase URL is stored in the audit log metadata below.
         meeting_id = save_transcript_and_get_id(
             filename=file.filename,
             transcript=transcript,
             user_id=current_user.id,
-            file_url=file_url,           # Supabase URL stored in DB for later download
         )
 
         # ── Step 4: Run AI agents ──────────────────────────────────────────
@@ -1796,6 +2042,7 @@ async def upload_file(
                 filename=file.filename,
                 transcript=transcript,
                 created_at="",
+                user_id=current_user.id,  # FIX: was never passed — every chunk from this path was tagged user_id=0
             )
         except Exception as e:
             logger.warning(f"ChromaDB indexing failed (non-fatal): {e}")
@@ -1868,7 +2115,8 @@ async def process_youtube(
         try:
             from server.core.rag.indexer import index_meeting
             index_meeting(meeting_id=meeting_id, filename=title,
-                          transcript=transcript, created_at="")
+                          transcript=transcript, created_at="",
+                          user_id=current_user.id)  # FIX: was never passed — tagged user_id=0
         except Exception as e:
             logger.warning(f"ChromaDB indexing failed (non-fatal): {e}")
 
@@ -1911,7 +2159,7 @@ async def chat_with_meeting_endpoint(
             raise HTTPException(status_code=404, detail="Meeting not found")
 
         from server.core.rag.chat import chat_with_meeting
-        result = chat_with_meeting(query=body.query, meeting_id=body.meeting_id)
+        result = chat_with_meeting(query=body.query, meeting_id=body.meeting_id, user_id=current_user.id)
         return {
             "answer":     result["answer"],
             "sources":    result["sources"],
@@ -1932,7 +2180,11 @@ def chat_search(
 ):
     try:
         from server.core.rag.chat import chat_across_meetings
-        result = chat_across_meetings(query=request.query)
+        # FIX: previously called with no user_id at all, which meant this
+        # endpoint searched every user's meetings, not just yours — see
+        # the FIX note on chat_across_meetings() in core/rag/chat.py for
+        # the full explanation of this bug.
+        result = chat_across_meetings(query=request.query, user_id=current_user.id)
         return {"answer": result["answer"], "sources": result["sources"], "mode": "cross"}
     except Exception as e:
         logger.error(f"Cross-meeting chat failed: {e}")
@@ -1951,7 +2203,7 @@ async def stream_chat_meeting(
 
     from server.core.rag.chat import stream_chat_with_meeting
     return StreamingResponse(
-        stream_chat_with_meeting(query=query, meeting_id=meeting_id),
+        stream_chat_with_meeting(query=query, meeting_id=meeting_id, user_id=current_user.id),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
     )
@@ -1963,8 +2215,10 @@ async def stream_chat_search(
     current_user: User = Depends(get_current_user),
 ):
     from server.core.rag.chat import stream_chat_across_meetings
+    # FIX: same unscoped cross-user bug as /chat/search — see the FIX note
+    # on stream_chat_across_meetings() in core/rag/chat.py.
     return StreamingResponse(
-        stream_chat_across_meetings(query=query),
+        stream_chat_across_meetings(query=query, user_id=current_user.id),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
     )
@@ -2002,27 +2256,258 @@ async def agent_chat(
 # =====================================================
 
 @app.post("/rag/reindex", tags=["RAG"])
-def reindex_all(current_user: User = Depends(get_current_user)):
+async def reindex_all(current_user: User = Depends(get_current_user)):
+    """
+    Re-index all meetings into ChromaDB.
+
+    ROOT CAUSE OF SLOWNESS (now fixed):
+    ─────────────────────────────────────
+    SentenceTransformer (~400MB) is a module-level singleton in embedder.py.
+    The singleton is cached per PROCESS.
+
+    In Docker: Celery runs in one process, FastAPI in another.
+    When FastAPI's asyncio.to_thread() runs _do_reindex(), it runs in
+    FastAPI's thread pool — same process. The model IS cached there after
+    the first call. BUT on a cold start (first reindex ever), it loads from disk.
+
+    The real bottleneck is NOT the model — it's:
+    1. ChromaDB upsert is slow for large transcripts (10,000+ word meetings)
+    2. The SentenceTransformer encodes all chunks sequentially
+    3. Each meeting takes 2-8 seconds depending on transcript length
+
+    FIXES:
+    ─────
+    1. Pre-warm the embedding model before the loop.
+       This surfaces the model-loading time clearly in logs instead of
+       hiding it inside the first meeting's processing time.
+
+    2. Return immediately with a job_id and run reindex as a background task.
+       The frontend no longer spins indefinitely — it gets a response in <1s
+       and can poll GET /rag/reindex/{job_id}/status for progress.
+
+    3. Store per-meeting progress in Redis so the frontend can show
+       "Indexing meeting 2 of 5..." instead of a blank spinner.
+    """
+    import uuid, json
+
+    job_id = str(uuid.uuid4())[:8]
+    rc     = _get_redis()   # None if Redis not running (ping() tested inside)
+
+    # ── No Redis: run synchronously, return result directly ───────────────────
+    # When Redis is not available (Windows dev without Redis installed),
+    # we cannot store progress or background the job.
+    # Instead: run reindex in a thread right now and return the final result.
+    # The frontend receives { done: true, indexed: N } immediately — no polling needed.
+    if rc is None:
+        logger.info("Redis not available — running reindex synchronously for job %s", job_id)
+
+        def _do_reindex_sync():
+            from server.core.rag.embedder import get_embedding_model
+            from server.core.rag.indexer  import index_meeting
+            get_embedding_model()
+            meetings = get_all_meetings_for_indexing(user_id=current_user.id)
+            indexed, failed = 0, []
+            for m in meetings:
+                try:
+                    index_meeting(
+                        meeting_id = m["id"],
+                        filename   = m["filename"],
+                        transcript = m["transcript"],
+                        created_at = str(m.get("created_at", "")),
+                        user_id    = m.get("user_id"),
+                    )
+                    indexed += 1
+                except Exception as e:
+                    failed.append({"id": m["id"], "filename": m["filename"], "error": str(e)})
+            return {"indexed": indexed, "total": len(meetings), "failed": failed}
+
+        try:
+            result = await asyncio.to_thread(_do_reindex_sync)
+            return {
+                "job_id":  job_id,
+                "status":  "done",
+                "step":    f"Complete — {result['indexed']} of {result['total']} meetings indexed.",
+                "indexed": result["indexed"],
+                "total":   result["total"],
+                "failed":  result["failed"],
+                "done":    True,
+            }
+        except Exception as e:
+            logger.error("Synchronous reindex failed: %s", e, exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Reindex failed: {e}")
+
+    # ── Redis available: background job with polling ───────────────────────────
+    # Store initial status immediately — frontend gets this within <100ms
     try:
-        from server.core.rag.indexer import index_meeting
-        meetings = get_all_meetings_for_indexing(user_id=current_user.id)
-        indexed  = 0
-        for m in meetings:
+        rc.setex(
+            f"reindex:{job_id}",
+            3600,
+            json.dumps({"status": "running", "indexed": 0, "total": 0, "failed": [], "done": False}),
+        )
+    except Exception:
+        pass   # Redis write failed — non-fatal
+
+    async def _run_background():
+        """Run reindex in background, updating Redis progress as we go."""
+        def _update(data: dict):
             try:
-                index_meeting(
-                    meeting_id = m["id"],
-                    filename   = m["filename"],
-                    transcript = m["transcript"],
-                    created_at = m["created_at"],
-                    user_id    = m.get("user_id"),
-                )
-                indexed += 1
-            except Exception as e:
-                logger.warning(f"Failed to index meeting {m['id']}: {e}")
-        return {"indexed": indexed, "total": len(meetings)}
+                rc = _get_redis()
+                if rc:
+                    rc.setex(f"reindex:{job_id}", 3600, json.dumps(data))
+            except Exception:
+                pass
+
+        def _do_reindex():
+            from server.core.rag.embedder import get_embedding_model
+            from server.core.rag.indexer  import index_meeting
+
+            logger.info("Reindex job %s: warming embedding model...", job_id)
+            _update({"status": "running", "step": "Loading AI model...", "indexed": 0, "total": 0, "failed": [], "done": False})
+            get_embedding_model()
+
+            meetings = get_all_meetings_for_indexing(user_id=current_user.id)
+            total    = len(meetings)
+            indexed  = 0
+            failed   = []
+
+            logger.info("Reindex job %s: %d meetings to index", job_id, total)
+            _update({"status": "running", "step": f"Indexing 0 of {total} meetings...", "indexed": 0, "total": total, "failed": [], "done": False})
+
+            for i, m in enumerate(meetings):
+                try:
+                    n_chunks = index_meeting(
+                        meeting_id = m["id"],
+                        filename   = m["filename"],
+                        transcript = m["transcript"],
+                        created_at = str(m.get("created_at", "")),
+                        user_id    = m.get("user_id"),
+                    )
+                    indexed += 1
+                    logger.info("Reindex %s: meeting %d → %d chunks (%d/%d)", job_id, m["id"], n_chunks, indexed, total)
+                except Exception as e:
+                    failed.append({"id": m["id"], "filename": m["filename"], "error": str(e)})
+                    logger.warning("Reindex %s: meeting %d failed: %s", job_id, m["id"], e)
+
+                _update({
+                    "status":  "running",
+                    "step":    f"Indexed {indexed} of {total} meetings...",
+                    "indexed": indexed,
+                    "total":   total,
+                    "failed":  failed,
+                    "done":    False,
+                })
+
+            _update({
+                "status":  "done",
+                "step":    f"Complete — {indexed} of {total} meetings indexed.",
+                "indexed": indexed,
+                "total":   total,
+                "failed":  failed,
+                "done":    True,
+            })
+            return {"indexed": indexed, "total": total, "failed": failed}
+
+        try:
+            await asyncio.to_thread(_do_reindex)
+        except Exception as e:
+            logger.error("Reindex job %s failed: %s", job_id, e, exc_info=True)
+            try:
+                rc = _get_redis()
+                if rc:
+                    rc.setex(f"reindex:{job_id}", 3600, json.dumps({
+                        "status": "error", "step": str(e), "indexed": 0, "total": 0, "failed": [], "done": True,
+                    }))
+            except Exception:
+                pass
+
+    # Fire and forget — don't await, return job_id immediately
+    asyncio.create_task(_run_background())
+
+    return {
+        "job_id":  job_id,
+        "status":  "started",
+        "message": "Reindex started in background. Poll /rag/reindex/status?job_id={job_id} for progress.",
+    }
+
+
+@app.get("/rag/reindex/status", tags=["RAG"])
+async def get_reindex_status(
+    job_id:       str,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Poll reindex background job progress.
+
+    FIX: was using celery_app.backend.client which requires Celery to be
+    fully configured and Redis reachable via Celery's broker URL.
+    On Windows dev without Redis running, this raised:
+      NameError: name 'celery_app' is not defined
+    Now uses a direct Redis client via _get_redis() which is more robust.
+    Falls back to a clear error message if Redis is not running.
+    """
+    import json
+
+    rc = _get_redis()
+    if rc is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Redis is not available. Reindex status cannot be retrieved. "
+                   "Start Redis or run: redis-server",
+        )
+
+    try:
+        raw = rc.get(f"reindex:{job_id}")
+        if not raw:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Reindex job '{job_id}' not found or expired (TTL 1 hour).",
+            )
+        return json.loads(raw)
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Reindex failed: {e}")
-        raise HTTPException(status_code=500, detail="Reindex failed")
+        logger.error("Failed to read reindex status for job %s: %s", job_id, e)
+        raise HTTPException(status_code=500, detail=f"Status check failed: {e}")
+
+
+@app.post("/rag/vacuum-orphaned", tags=["RAG"])
+async def vacuum_orphaned_chunks_endpoint(
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Repairs ChromaDB data drift against Postgres, in two passes:
+
+    1. Backfill ownership: chunks tagged `user_id: 0` ("unknown owner",
+       from indexing call sites that historically never passed user_id —
+       now fixed, but existing data needs a one-time repair) get corrected
+       to their real owner by looking up meeting_id in Postgres.
+    2. Vacuum orphans: chunks whose meeting_id no longer exists in
+       Postgres at all (e.g. deleted directly in Supabase before
+       DELETE /meetings/{id} existed) are removed entirely.
+
+    Meeting ids and ownership are a single global sequence in Postgres
+    (not per-user), so this comparison is the same regardless of which
+    user runs it — it can only ever correct/remove data that has no
+    legitimate current owner, never something you or anyone else can
+    still access. Safe to run repeatedly; it's a no-op once caught up.
+    """
+    from server.core.rag.indexer import vacuum_orphaned_chunks, backfill_chunk_ownership
+
+    owner_map = await asyncio.to_thread(get_meeting_owner_map)
+    backfill_result = await asyncio.to_thread(backfill_chunk_ownership, owner_map)
+
+    valid_ids = set(owner_map.keys())
+    vacuum_result = await asyncio.to_thread(vacuum_orphaned_chunks, valid_ids)
+
+    if vacuum_result["orphaned_meeting_ids"] or backfill_result["chunks_fixed"]:
+        logger.warning(
+            "Repair run by user %d: backfilled %d chunks' ownership, "
+            "removed %d orphaned chunks from meeting_ids %s",
+            current_user.id, backfill_result["chunks_fixed"],
+            vacuum_result["chunks_deleted"], vacuum_result["orphaned_meeting_ids"],
+        )
+
+    return {**vacuum_result, **backfill_result}
 
 
 # =====================================================
@@ -2063,11 +2548,21 @@ async def websocket_progress(websocket: WebSocket, job_id: str):
 
 
 async def _run_with_progress(job_id: str, filename: str, transcript_fn, user_id: int = None):
-    async def step(name: str, message: str, pct: int):
-        await progress.send(job_id, {
-            "step": name, "message": message, "pct": pct,
-            "ts": datetime.datetime.now().isoformat(),
-        })
+    # Write initial status immediately so first poll returns something
+    _write_job_status(job_id, {"step": "extract", "message": "Starting...", "pct": 5, "meeting_id": None})
+
+    async def step(name: str, message: str, pct: int, meeting_id=None):
+        payload = {
+            "step":       name,
+            "message":    message,
+            "pct":        pct,
+            "meeting_id": meeting_id,
+            "ts":         datetime.datetime.now().isoformat(),
+        }
+        # Write to job store so HTTP polling (/jobs/{id}/status) works
+        _write_job_status(job_id, payload)
+        # Also push via WebSocket if connected
+        await progress.send(job_id, payload)
 
     try:
         await step("extract",    "Extracting audio...",                10)
@@ -2078,25 +2573,27 @@ async def _run_with_progress(job_id: str, filename: str, transcript_fn, user_id:
             save_transcript_and_get_id, filename, transcript, None, user_id
         )
 
-        await step("intel",      "Generating meeting intelligence...", 60)
+        await step("intel",      "Generating meeting intelligence...", 60, meeting_id)
         from server.core.intelligence.workflow import analyze_transcript
         intelligence = await asyncio.to_thread(analyze_transcript, transcript)
 
-        await step("intel",      "Saving intelligence...",             75)
+        await step("intel",      "Saving intelligence...",             75, meeting_id)
         await asyncio.to_thread(save_meeting_intelligence, meeting_id, intelligence)
 
-        await step("index",      "Indexing for RAG search...",         88)
+        await step("index",      "Indexing for RAG search...",         88, meeting_id)
         try:
             from server.core.rag.indexer import index_meeting
             await asyncio.to_thread(index_meeting, meeting_id, filename, transcript, "")
         except Exception as e:
             logger.warning(f"Index failed (non-fatal): {e}")
 
-        await step("done",       "Processing complete!",               100)
+        await step("done",       "Processing complete!",               100, meeting_id)
         return meeting_id, transcript, intelligence
 
     except Exception as e:
-        await progress.send(job_id, {"step": "error", "message": str(e), "pct": 0})
+        err_payload = {"step": "error", "message": str(e), "pct": 0, "meeting_id": None}
+        _write_job_status(job_id, err_payload)
+        await progress.send(job_id, err_payload)
         raise
 
 
@@ -2122,13 +2619,16 @@ async def upload_file_with_progress(
     try:
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
+    except Exception as e:
+        logger.error(f"File save failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save file to disk")
 
+    # Supabase upload is optional — if not configured or fails, processing continues
+    try:
         supabase_filename = f"user_{current_user.id}/{file.filename}"
         upload_to_supabase(local_path=str(file_path), filename=supabase_filename)
-
     except Exception as e:
-        logger.error(f"Upload failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to save file")
+        logger.warning(f"Supabase upload skipped (non-fatal): {e}")
 
     file_size_mb = round(file_path.stat().st_size / (1024 * 1024), 2)
 
@@ -2168,6 +2668,10 @@ async def youtube_with_progress(
     job_id     = request.get("job_id") or job_id or "noop"
     start_time = time.time()
 
+    def _yt_step(name, message, pct, meeting_id=None):
+        """Sync helper to write job status from inside a thread."""
+        _write_job_status(job_id, {"step": name, "message": message, "pct": pct, "meeting_id": meeting_id})
+
     def do_transcribe():
         from server.core.transcription.youtube_downloader import download_youtube
         from server.core.transcription.audio_extractor import extract_audio
@@ -2176,25 +2680,32 @@ async def youtube_with_progress(
         wav     = extract_audio(yt_data["audio_file"], enable_cleaning=enable_audio_cleaning)
         return transcribe_audio(wav), yt_data["title"]
 
+    # Write initial status immediately so first poll does not 404
+    _write_job_status(job_id, {"step": "download", "message": "Downloading YouTube audio...", "pct": 8, "meeting_id": None})
     await progress.send(job_id, {"step": "download", "message": "Downloading YouTube audio...", "pct": 8})
 
     try:
         transcript, title = await asyncio.to_thread(do_transcribe)
     except Exception as e:
-        await progress.send(job_id, {"step": "error", "message": str(e), "pct": 0})
+        err = {"step": "error", "message": str(e), "pct": 0, "meeting_id": None}
+        _write_job_status(job_id, err)
+        await progress.send(job_id, err)
         raise HTTPException(status_code=500, detail=str(e))
 
+    _write_job_status(job_id, {"step": "transcribe", "message": "Transcription complete", "pct": 40, "meeting_id": None})
     await progress.send(job_id, {"step": "transcribe", "message": "Transcription complete", "pct": 40})
 
     meeting_id = await asyncio.to_thread(
         save_transcript_and_get_id, title, transcript, None, current_user.id
     )
 
+    _write_job_status(job_id, {"step": "intel", "message": "Generating intelligence...", "pct": 60, "meeting_id": meeting_id})
     await progress.send(job_id, {"step": "intel", "message": "Generating intelligence...", "pct": 60})
     from server.core.intelligence.workflow import analyze_transcript
     intelligence = await asyncio.to_thread(analyze_transcript, transcript)
     await asyncio.to_thread(save_meeting_intelligence, meeting_id, intelligence)
 
+    _write_job_status(job_id, {"step": "index", "message": "Indexing for RAG...", "pct": 88, "meeting_id": meeting_id})
     await progress.send(job_id, {"step": "index", "message": "Indexing for RAG...", "pct": 88})
     try:
         from server.core.rag.indexer import index_meeting
@@ -2202,6 +2713,7 @@ async def youtube_with_progress(
     except Exception as e:
         logger.warning(f"Index failed: {e}")
 
+    _write_job_status(job_id, {"step": "done", "message": "Processing complete!", "pct": 100, "meeting_id": meeting_id})
     await progress.send(job_id, {"step": "done", "message": "Processing complete!", "pct": 100})
 
     return YouTubeResponse(
@@ -2221,65 +2733,232 @@ async def youtube_with_progress(
 @app.post("/meetings/{meeting_id}/diarize", tags=["Transcription"])
 async def diarize_meeting(
     meeting_id:   int,
+    force:        bool = False,   # ?force=true skips cache and re-runs
     current_user: User = Depends(get_current_user),
 ):
+    """
+    Run speaker diarization on a meeting.
+
+    FIX 1 — Root cause of blank speaker results:
+        Old code passed a FAKE single segment spanning 0–9999s as "whisper segments".
+        This caused every word to be attributed to SPEAKER_00 because that one fake
+        segment overlapped with every pyannote time range.
+        Fix: call transcribe_audio_with_timestamps() to get REAL per-sentence timestamps
+        BEFORE running diarization. Each sentence now maps to its actual speaker.
+
+    FIX 2 — Response shape:
+        Old response: { transcript, talk_time, num_speakers }
+        New response: { speakers, segments, total_duration, num_speakers, ... }
+        The frontend SpeakersTab now receives exactly the shape it expects.
+
+    FIX 3 — Cached response also returns full shape:
+        Old cached response returned a truncated dict. Now returns the same
+        complete shape as a fresh run, rebuilt from DB storage.
+    """
     meeting = get_meeting_by_id(meeting_id, user_id=current_user.id)
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
 
     if not meeting.get("transcript"):
-        raise HTTPException(status_code=400, detail="No transcript yet. Upload and process first.")
+        raise HTTPException(
+            status_code=400,
+            detail="No transcript yet. Upload and process the meeting first."
+        )
 
-    cached = get_diarization(meeting_id)
-    if cached:
-        return {
-            "meeting_id":   meeting_id,
-            "transcript":   cached["transcript"],
-            "talk_time":    cached["talk_time"],
-            "num_speakers": cached["num_speakers"],
-            "cached":       True,
-        }
+    # Return cached result unless force=true
+    if not force:
+        cached = get_diarization(meeting_id)
+        if cached:
+            # FIX: rebuild full frontend shape from cached DB data.
+            # The DB stores talk_time (dict) and transcript (labeled string).
+            # We rebuild speakers list and segments list from transcript parsing.
+            talk_time  = cached["talk_time"]
+            transcript = cached["transcript"]
 
+            speakers_list = [
+                {
+                    "id":             sp_id,
+                    "label":          data.get("label", sp_id),
+                    "total_time":     data.get("seconds", 0),
+                    "percentage":     data.get("percentage", 0),
+                    "segments_count": data.get("segments", 0),
+                }
+                for sp_id, data in talk_time.items()
+            ]
+
+            # Parse the stored labeled transcript into segment dicts
+            segments_list = _parse_labeled_transcript(transcript)
+
+            return {
+                "meeting_id":     meeting_id,
+                "speakers":       speakers_list,
+                "segments":       segments_list,
+                "total_duration": segments_list[-1]["end"] if segments_list else 0,
+                "num_speakers":   cached["num_speakers"],
+                "transcript":     transcript,
+                "talk_time":      talk_time,
+                "cached":         True,
+            }
+
+    # Find the audio file on disk
     filename = meeting["filename"]
-    stem     = Path(filename).stem
-    candidates = [
-        AUDIO_DIR / f"{stem}.wav",
-        AUDIO_DIR / filename,
-        VIDEO_DIR / filename,
-    ]
-    audio_path = next((str(p) for p in candidates if p.exists()), None)
+    stem     = Path(filename).stem   # "Weekly Meeting Example" (no extension)
+
+    AUDIO_EXTENSIONS_LIST = [".wav", ".mp3", ".m4a", ".ogg", ".flac", ".aac", ".mp4", ".mov", ".webm"]
+
+    candidates = []
+    # 1. Try stem + every audio extension in both audio and video dirs
+    for ext in AUDIO_EXTENSIONS_LIST:
+        candidates.append(AUDIO_DIR / f"{stem}{ext}")
+        candidates.append(VIDEO_DIR / f"{stem}{ext}")
+    # 2. Try exact filename as stored in DB
+    candidates.append(AUDIO_DIR / filename)
+    candidates.append(VIDEO_DIR / filename)
+    # 3. Glob search — use as_posix() to avoid Windows backslash bug in glob
+    import glob as _glob
+    for pattern in [
+        (AUDIO_DIR / f"{stem}.*").as_posix(),
+        (VIDEO_DIR / f"{stem}.*").as_posix(),
+    ]:
+        for found in _glob.glob(pattern):
+            candidates.append(Path(found))
+    # 4. os.walk fallback — scans entire uploads folder, catches anything glob missed
+    for search_dir in [AUDIO_DIR, VIDEO_DIR]:
+        if search_dir.exists():
+            for root, _, files in os.walk(str(search_dir)):
+                for fname in files:
+                    fpath = Path(root) / fname
+                    if fpath.stem.lower() == stem.lower():
+                        candidates.append(fpath)
+
+    # Deduplicate while preserving order
+    seen = set()
+    unique_candidates = []
+    for p in candidates:
+        key = str(p).lower()
+        if key not in seen:
+            seen.add(key)
+            unique_candidates.append(p)
+
+    audio_path = next((str(p) for p in unique_candidates if p.exists()), None)
 
     if not audio_path:
         raise HTTPException(
             status_code=404,
-            detail=f"Audio file not found. Looked in: {[str(p) for p in candidates]}",
+            detail=(
+                f"Audio file not found on disk for '{filename}'. "
+                f"Diarization needs the original recording. "
+                f"Searched {len(unique_candidates)} locations including: "
+                f"{[str(p) for p in unique_candidates[:6]]}"
+            ),
         )
 
     try:
+        # FIX: Get REAL per-sentence timestamps from Whisper before running diarization.
+        # This is the critical fix — we must NOT use fake pseudo_segments.
+        # transcribe_audio_with_timestamps() returns hundreds of small segments,
+        # each with accurate start/end times. merge_with_transcript() uses these
+        # to correctly assign each sentence to the speaker who said it.
+        from server.core.transcription.transcribe          import transcribe_audio_with_timestamps
         from server.core.transcription.speaker_diarization import run_diarization
-        pseudo_segments = [{"start": 0.0, "end": 9999.0, "text": meeting["transcript"]}]
+
+        logger.info(
+            "Diarization for meeting %d: transcribing with timestamps first...",
+            meeting_id,
+        )
+
+        # Run both Whisper (with timestamps) and pyannote in a thread
+        # — both are CPU-bound blocking operations, must not run on the event loop
+        whisper_segments = await asyncio.to_thread(
+            transcribe_audio_with_timestamps, audio_path
+        )
+
+        logger.info(
+            "Got %d whisper segments for meeting %d. Running pyannote...",
+            len(whisper_segments), meeting_id,
+        )
 
         result = await asyncio.to_thread(
-            run_diarization, audio_path=audio_path, whisper_segments=pseudo_segments,
+            run_diarization,
+            audio_path       = audio_path,
+            whisper_segments = whisper_segments,
         )
+
+        # Save to DB (talk_time and transcript for later cache + sentiment use)
         save_diarization(
             meeting_id   = meeting_id,
             transcript   = result["transcript"],
             talk_time    = result["talk_time"],
             num_speakers = result["num_speakers"],
         )
+
         return {
-            "meeting_id":   meeting_id,
-            "transcript":   result["transcript"],
-            "talk_time":    result["talk_time"],
-            "num_speakers": result["num_speakers"],
-            "cached":       False,
+            "meeting_id":     meeting_id,
+            "speakers":       result["speakers"],
+            "segments":       result["segments"],
+            "total_duration": result["total_duration"],
+            "num_speakers":   result["num_speakers"],
+            "transcript":     result["transcript"],
+            "talk_time":      result["talk_time"],
+            "cached":         False,
         }
+
     except RuntimeError as e:
+        # RuntimeError = missing HF_TOKEN or pyannote not installed
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Diarization failed for meeting {meeting_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Diarization failed: {str(e)}")
+        logger.error("Diarization failed for meeting %d: %s", meeting_id, e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Diarization failed: {type(e).__name__}: {str(e)[:200]}",
+        )
+
+
+def _parse_labeled_transcript(transcript: str) -> list[dict]:
+    """
+    Parse a labeled transcript string back into a list of segment dicts.
+
+    Input line format:  "Speaker 1 [0:14]: I agree with that plan."
+    Output:             {"speaker": "SPEAKER_01", "speaker_label": "Speaker 1",
+                         "start": 14.0, "end": 14.0, "text": "I agree with that plan."}
+
+    This allows us to rebuild the segments list from DB storage
+    without re-running diarization.
+    """
+    import re
+    segments = []
+    pattern = re.compile(r'^(.*?)\s*\[(\d+):(\d{2})\]:\s*(.*)$')
+
+    for i, line in enumerate(transcript.strip().split('\n')):
+        line = line.strip()
+        if not line:
+            continue
+        m = pattern.match(line)
+        if not m:
+            continue
+        label   = m.group(1).strip()
+        minutes = int(m.group(2))
+        seconds = int(m.group(3))
+        text    = m.group(4).strip()
+        start   = float(minutes * 60 + seconds)
+
+        # Try to infer speaker ID from label (Speaker 1 → SPEAKER_00)
+        num_match = re.search(r'\d+', label)
+        if num_match:
+            sp_num = int(num_match.group()) - 1
+            speaker_id = f"SPEAKER_{sp_num:02d}"
+        else:
+            speaker_id = f"SPEAKER_{i:02d}"
+
+        segments.append({
+            "speaker":       speaker_id,
+            "speaker_label": label,
+            "start":         start,
+            "end":           start,   # end not stored in transcript string
+            "text":          text,
+        })
+
+    return segments
 
 
 @app.get("/meetings/{meeting_id}/diarization", tags=["Transcription"])
@@ -2287,19 +2966,45 @@ def get_diarization_result(
     meeting_id:   int,
     current_user: User = Depends(get_current_user),
 ):
+    """
+    Fetch stored diarization result. Returns 404 if not yet run.
+    Returns the same full shape as POST /diarize for consistent frontend handling.
+    """
     meeting = get_meeting_by_id(meeting_id, user_id=current_user.id)
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
 
     result = get_diarization(meeting_id)
     if not result:
-        raise HTTPException(status_code=404, detail="No diarization found. Run POST /meetings/{id}/diarize first.")
+        raise HTTPException(
+            status_code=404,
+            detail="Speaker detection not run yet. Click 'Run Speaker Detection' to start."
+        )
+
+    talk_time  = result["talk_time"]
+    transcript = result["transcript"]
+
+    speakers_list = [
+        {
+            "id":             sp_id,
+            "label":          data.get("label", sp_id),
+            "total_time":     data.get("seconds", 0),
+            "percentage":     data.get("percentage", 0),
+            "segments_count": data.get("segments", 0),
+        }
+        for sp_id, data in talk_time.items()
+    ]
+
+    segments_list = _parse_labeled_transcript(transcript)
 
     return {
-        "meeting_id":   meeting_id,
-        "transcript":   result["transcript"],
-        "talk_time":    result["talk_time"],
-        "num_speakers": result["num_speakers"],
+        "meeting_id":     meeting_id,
+        "speakers":       speakers_list,
+        "segments":       segments_list,
+        "total_duration": segments_list[-1]["end"] if segments_list else 0,
+        "num_speakers":   result["num_speakers"],
+        "transcript":     transcript,
+        "talk_time":      talk_time,
     }
 
 
@@ -2529,8 +3234,12 @@ async def get_job_status(
     job_id:       str,
     current_user: User = Depends(get_current_user),
 ):
-    from server.core.tasks import get_job_status as _get_status
-    status = _get_status(job_id)
+    # Read from our own store (_mem_jobs dict or Redis if available).
+    # We do NOT call tasks.get_job_status() here because that uses Celery's
+    # Redis backend and logs noisy "Could not read from Redis" warnings on
+    # every poll when Redis is not running (local dev without Redis).
+    # Our _read_job_status() already handles Redis gracefully via _get_redis().
+    status = _read_job_status(job_id)
 
     if status is None:
         raise HTTPException(

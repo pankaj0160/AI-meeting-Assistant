@@ -66,10 +66,18 @@ def chat_with_meeting(
     query: str,
     meeting_id: int,
     top_k: int = 5,
+    user_id: int | None = None,
 ) -> dict:
     """
     Answer a question grounded in a single meeting's transcript.
     Traced with Langfuse — records retrieval + LLM steps separately.
+
+    FIX: added `user_id`, threaded through to hybrid_search/ChromaDB as a
+    defense-in-depth check. The API endpoint already verifies meeting
+    ownership before calling this function, so this isn't the only thing
+    standing between a user and someone else's meeting — but scoping here
+    too means a future endpoint that forgets that ownership check doesn't
+    silently become a data leak.
     """
     trace = _langfuse.trace(
         name="chat_with_meeting",
@@ -81,7 +89,7 @@ def chat_with_meeting(
         name="hybrid_search",
         input={"query": query, "meeting_id": meeting_id, "top_k": top_k},
     )
-    chunks = hybrid_search(query=query, meeting_id=meeting_id, top_k=top_k)
+    chunks = hybrid_search(query=query, meeting_id=meeting_id, top_k=top_k, user_id=user_id)
     retrieval_span.end(
         output={"num_chunks": len(chunks)},
         metadata={"chunk_ids": [c.get("id") for c in chunks]},
@@ -150,22 +158,34 @@ QUESTION:
 def chat_across_meetings(
     query: str,
     top_k: int = 5,
+    user_id: int | None = None,
 ) -> dict:
     """
-    Answer a question by searching across ALL meetings.
+    Answer a question by searching across ALL of the current user's meetings.
     Traced with Langfuse.
+
+    FIX (security): this function previously had no `user_id` parameter at
+    all, and called hybrid_search(meeting_id=None) with no scoping — which
+    resolves to `_get_all_chunks_cross_meeting(user_id=None)`, i.e. an
+    unfiltered `collection.get()` over the ENTIRE ChromaDB collection.
+    hybrid_search/_get_all_chunks_cross_meeting already supported a
+    user_id filter (the code comments there even say "user A could
+    potentially see results from user B's meetings" as the bug it was
+    meant to fix) — but nothing in this call chain ever passed it through,
+    so cross-meeting chat was answering from every user's meetings, not
+    just the person asking. Now user_id flows: endpoint → here → hybrid_search.
     """
     trace = _langfuse.trace(
         name="chat_across_meetings",
-        input={"query": query},
+        input={"query": query, "user_id": user_id},
         metadata={"top_k": top_k},
     )
 
     retrieval_span = trace.span(
         name="hybrid_search_all",
-        input={"query": query, "meeting_id": None, "top_k": top_k},
+        input={"query": query, "meeting_id": None, "top_k": top_k, "user_id": user_id},
     )
-    chunks = hybrid_search(query=query, meeting_id=None, top_k=top_k)
+    chunks = hybrid_search(query=query, meeting_id=None, top_k=top_k, user_id=user_id)
     retrieval_span.end(output={"num_chunks": len(chunks)})
 
     context = _build_context(chunks)
@@ -237,9 +257,13 @@ def stream_chat_with_meeting(
     query: str,
     meeting_id: int,
     top_k: int = 5,
+    user_id: int | None = None,
 ) -> Generator[str, None, None]:
     """
     Stream an answer about a single meeting, token by token.
+
+    FIX: added `user_id`, passed through to hybrid_search — same
+    defense-in-depth reasoning as chat_with_meeting() above.
 
     HOW STREAMING WORKS:
         1. We run hybrid_search exactly like before — that part isn't streamed
@@ -268,6 +292,7 @@ def stream_chat_with_meeting(
         query      : the user's question
         meeting_id : which meeting to search in
         top_k      : how many transcript chunks to retrieve
+        user_id    : owner of the meeting, for defense-in-depth scoping
 
     Yields:
         SSE-formatted strings:  'data: {"token": "Hello"}\n\n'
@@ -278,7 +303,7 @@ def stream_chat_with_meeting(
     # ── Step 1: Retrieval (not streamed — fast enough) ───────────────────────
     # Same hybrid_search call as the non-streaming version.
     # We get the context chunks before starting the LLM call.
-    chunks = hybrid_search(query=query, meeting_id=meeting_id, top_k=top_k)
+    chunks = hybrid_search(query=query, meeting_id=meeting_id, top_k=top_k, user_id=user_id)
     context = _build_context(chunks)
 
     system = """You are a helpful meeting assistant.
@@ -348,10 +373,17 @@ QUESTION:
 def stream_chat_across_meetings(
     query: str,
     top_k: int = 5,
+    user_id: int | None = None,
 ) -> Generator[str, None, None]:
     """
-    Stream an answer by searching across ALL meetings, token by token.
-    Same pattern as stream_chat_with_meeting but without meeting_id filter.
+    Stream an answer by searching across ALL of the current user's meetings,
+    token by token. Same pattern as stream_chat_with_meeting but without a
+    meeting_id filter.
+
+    FIX (security): same bug as chat_across_meetings() above — this had no
+    user_id parameter and called hybrid_search(meeting_id=None) completely
+    unscoped, meaning the streaming "All Meetings" chat could answer from
+    every user's meetings, not just the person asking. Now scoped.
 
     Yields:
         SSE-formatted strings:  'data: {"token": "Hello"}\n\n'
@@ -359,8 +391,9 @@ def stream_chat_across_meetings(
     """
     import json
 
-    # Search across all meetings (meeting_id=None means no filter in hybrid_search)
-    chunks = hybrid_search(query=query, meeting_id=None, top_k=top_k)
+    # Search across all of this user's meetings (meeting_id=None means no
+    # meeting filter; user_id is what actually scopes it to one account).
+    chunks = hybrid_search(query=query, meeting_id=None, top_k=top_k, user_id=user_id)
     context = _build_context(chunks)
 
     system = """You are a helpful meeting assistant with access to multiple meeting transcripts.

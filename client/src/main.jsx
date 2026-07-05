@@ -6,8 +6,10 @@ import './index.css'
 import App from './App'
 import { ThemeProvider } from './ThemeContext'
 import { AuthProvider } from './context/AuthContext'
+import { WorkspaceProvider } from './context/WorkspaceContext'
 import ErrorBoundary from './components/ErrorBoundary'
 import { ToastProvider } from './components/Toast'
+import { CommandPaletteProvider } from './components/CommandPalette'
 
 // FIX: Wrap the entire app in an ErrorBoundary.
 //
@@ -33,9 +35,11 @@ createRoot(document.getElementById('root')).render(
     >
       <ThemeProvider>
         <AuthProvider>
-          <ToastProvider>
-            <App />
-          </ToastProvider>
+          <WorkspaceProvider>
+            <ToastProvider>
+              <App />
+            </ToastProvider>
+          </WorkspaceProvider>
         </AuthProvider>
       </ThemeProvider>
     </ErrorBoundary>

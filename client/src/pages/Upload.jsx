@@ -1,18 +1,38 @@
 // client/src/pages/Upload.jsx
+//
+// WHAT THIS PAGE DOES:
+// ────────────────────
+// Lets users upload audio/video files or paste a YouTube URL.
+// Shows a progress overlay while processing happens server-side.
+// Navigates to the meeting detail page when done.
+//
+// ROOT CAUSE FIX (the stuck spinner bug):
+// ────────────────────────────────────────
+// Both /upload/progress and /youtube/progress are SYNCHRONOUS endpoints.
+// They do ALL the work (download → transcribe → intelligence → index)
+// and then return ONE response with the meeting_id when complete.
+//
+// Old code called prog.start() which returned a job_id, then called
+// prog.beginPolling(jobId) which tried to poll Redis for status.
+// Redis is not running in Windows dev → every poll returned 404 →
+// spinner stuck forever even though the meeting was fully processed.
+//
+// New code: both handlers just await the POST (which takes 2-5 minutes),
+// read meeting_id from the JSON response, call prog.complete(meetingId),
+// then navigate. No Redis, no polling, no job_id.
+// The progress overlay animates through steps on a timer while waiting.
 
 import { useState, useRef, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate }                    from 'react-router-dom'
 import {
   Upload as UploadIcon, Play, FileAudio,
   FileVideo, X, AlertCircle, ArrowRight, CheckCircle,
 } from 'lucide-react'
-import { useTheme } from '../ThemeContext'
-import { useUploadProgress, STEPS } from '../hooks/useUploadProgress'
+import { useTheme }                       from '../ThemeContext'
+import { useUploadProgress, STEPS }       from '../hooks/useUploadProgress'
 import { PageHeader, Card, Button, Divider } from '../components/ui'
-import { getToken, getApiBase } from '../api/client'
-// FIX: getApiBase() imported from the single source of truth in api/client.js.
-// Old code had: const API_BASE = '...' || 'http://localhost:8000'
-// That hardcoded localhost pointed to the developer's own machine in production.
+import { getToken, getApiBase }           from '../api/client'
+import { useToast }                       from '../components/Toast'
 
 const AUDIO_EXTS = ['mp3', 'wav', 'm4a', 'aac', 'flac']
 const VIDEO_EXTS = ['mp4', 'mkv', 'avi', 'mov', 'webm']
@@ -23,9 +43,10 @@ function fmtSize(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-// ── Progress overlay ───────────────────────────────────────────────────────────
+// ── Progress overlay ──────────────────────────────────────────────────────────
 function ProgressOverlay({ pct, step, message, T }) {
   const currentIdx = STEPS.findIndex(s => s.id === step)
+
   return (
     <div style={{
       position: 'fixed', inset: 0,
@@ -46,19 +67,20 @@ function ProgressOverlay({ pct, step, message, T }) {
           Processing Meeting
         </div>
         <div style={{ fontSize: '13px', color: T.text3, marginBottom: '28px' }}>
-          {message || 'Please wait...'}
+          {message || 'Please wait — this takes a few minutes...'}
         </div>
 
         {/* Progress bar */}
         <div style={{ height: '5px', borderRadius: '99px', background: T.surface2, marginBottom: '28px', overflow: 'hidden' }}>
           <div style={{
             height: '100%', width: `${pct}%`,
-            background: T.btnGrad, borderRadius: '99px',
-            transition: 'width 0.6s ease',
+            background: `linear-gradient(90deg, ${T.accent}, ${T.accentLight || T.accent})`,
+            borderRadius: '99px',
+            transition: 'width 1.2s ease',
           }} />
         </div>
 
-        {/* Steps */}
+        {/* Steps list */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '11px' }}>
           {STEPS.map((s, i) => {
             const done   = i < currentIdx
@@ -75,11 +97,16 @@ function ProgressOverlay({ pct, step, message, T }) {
                   {done
                     ? <CheckCircle size={13} color={T.emerald} />
                     : active
-                      ? <div className="spinner" style={{ width: '12px', height: '12px', borderColor: T.accent, borderTopColor: 'transparent' }} />
+                      ? <div className="spinner" style={{ width: '12px', height: '12px', borderColor: T.accent + '44', borderTopColor: T.accent }} />
                       : <span style={{ fontSize: '11px' }}>{s.icon}</span>
                   }
                 </div>
-                <div style={{ flex: 1, fontSize: '13px', fontWeight: active ? 650 : done ? 500 : 400, color: done ? T.emerald : active ? T.text : T.text4, transition: 'color 0.3s ease' }}>
+                <div style={{
+                  flex: 1, fontSize: '13px',
+                  fontWeight: active ? 650 : done ? 500 : 400,
+                  color: done ? T.emerald : active ? T.text : T.text4,
+                  transition: 'color 0.3s ease',
+                }}>
                   {s.label}
                 </div>
                 {active && (
@@ -94,12 +121,13 @@ function ProgressOverlay({ pct, step, message, T }) {
   )
 }
 
-// ── Main ───────────────────────────────────────────────────────────────────────
+// ── Main ──────────────────────────────────────────────────────────────────────
 export default function Upload() {
-  const { T }    = useTheme()
-  const navigate = useNavigate()
-  const inputRef = useRef()
-  const prog     = useUploadProgress()
+  const { T }     = useTheme()
+  const navigate  = useNavigate()
+  const inputRef  = useRef()
+  const prog      = useUploadProgress()
+  const { toast } = useToast()
 
   const [file,     setFile]     = useState(null)
   const [dragOver, setDragOver] = useState(false)
@@ -121,44 +149,92 @@ export default function Upload() {
     if (dropped) validateAndSetFile(dropped)
   }, [])
 
+  // ── File upload handler ─────────────────────────────────────────────────────
   const handleFileSubmit = async () => {
     if (!file) return
     setError(null)
+
+    // Start progress overlay — animates through steps while POST is in-flight
+    prog.start()
+
     try {
-      const jobId = await prog.start()
       const token = getToken()
       const form  = new FormData()
       form.append('file', file)
-      const res = await fetch(`${getApiBase()}/upload/progress?job_id=${jobId}`, {
-        method: 'POST',
+
+      // FIX: just await the POST — it returns meeting_id when fully done.
+      // Old code tried to poll Redis for progress, which isn't running in dev.
+      // This POST takes 2-5 minutes but returns the complete result in one go.
+      const res = await fetch(`${getApiBase()}/upload/progress`, {
+        method:  'POST',
         headers: { 'Authorization': `Bearer ${token}` },
-        body: form,
+        body:    form,
       })
-      if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error || `HTTP ${res.status}`) }
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.detail || err.error || `Upload failed (HTTP ${res.status})`)
+      }
+
       const data = await res.json()
-      prog.finish()
-      await new Promise(r => setTimeout(r, 800))
-      navigate(`/app/meetings/${data.meeting_id}`)
-    } catch (e) { setError(e.message); prog.reset() }
+
+      // meeting_id is in the response — no polling needed
+      const meetingId = data.meeting_id
+      if (!meetingId) throw new Error('Server did not return a meeting ID.')
+
+      prog.complete(meetingId)
+      toast.success('Upload complete', 'AI analysis is ready.')
+      await new Promise(r => setTimeout(r, 900))
+      navigate(`/app/meetings/${meetingId}`)
+
+    } catch (e) {
+      prog.fail(e.message)
+      setError(e.message)
+    }
   }
 
+  // ── YouTube handler ─────────────────────────────────────────────────────────
   const handleYouTubeSubmit = async () => {
     if (!ytUrl.trim()) return
     setError(null)
+
+    // Start progress overlay
+    prog.start()
+
     try {
-      const jobId = await prog.start()
       const token = getToken()
-      const res = await fetch(`${getApiBase()}/youtube/progress?job_id=${jobId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ url: ytUrl.trim(), job_id: jobId }),
+
+      // FIX: same pattern — await the POST, read meeting_id from response.
+      // YouTube download + transcribe + intelligence all happen server-side.
+      // The POST blocks until everything is done, then returns meeting_id.
+      const res = await fetch(`${getApiBase()}/youtube/progress`, {
+        method:  'POST',
+        headers: {
+          'Content-Type':  'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ url: ytUrl.trim() }),
       })
-      if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error || `HTTP ${res.status}`) }
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.detail || err.error || `HTTP ${res.status}`)
+      }
+
       const data = await res.json()
-      prog.finish()
-      await new Promise(r => setTimeout(r, 800))
-      navigate(`/app/meetings/${data.meeting_id}`)
-    } catch (e) { setError(e.message); prog.reset() }
+
+      const meetingId = data.meeting_id
+      if (!meetingId) throw new Error('Server did not return a meeting ID.')
+
+      prog.complete(meetingId)
+      toast.success('Upload complete', 'AI analysis is ready.')
+      await new Promise(r => setTimeout(r, 900))
+      navigate(`/app/meetings/${meetingId}`)
+
+    } catch (e) {
+      prog.fail(e.message)
+      setError(e.message)
+    }
   }
 
   const tabStyle = (active) => ({
@@ -174,15 +250,21 @@ export default function Upload() {
   })
 
   return (
-    <div>
-      {prog.active && <ProgressOverlay pct={prog.pct} step={prog.step} message={prog.message} T={T} />}
+    <div className="page-enter">
+      {prog.active && (
+        <ProgressOverlay
+          pct={prog.pct}
+          step={prog.step}
+          message={prog.message}
+          T={T}
+        />
+      )}
 
       <PageHeader
         title="Upload Meeting"
         subtitle="Upload a file or paste a YouTube URL to transcribe and analyze."
       />
 
-      {/* ── Centered content column ── */}
       <div style={{ maxWidth: '680px', margin: '0 auto' }}>
 
         {/* Tab switcher */}
@@ -215,7 +297,7 @@ export default function Upload() {
                   padding: file ? '20px 24px' : '48px 32px',
                   textAlign: 'center',
                   cursor: file ? 'default' : 'pointer',
-                  background: dragOver ? T.accentHover : 'transparent',
+                  background: dragOver ? T.accentBg : 'transparent',
                   borderBottom: file ? `1px solid ${T.border}` : 'none',
                   transition: 'background 0.15s ease',
                 }}
@@ -232,7 +314,7 @@ export default function Upload() {
                     <div style={{
                       width: '56px', height: '56px', borderRadius: '14px',
                       background: dragOver ? T.accentBg : T.surface2,
-                      border: `2px dashed ${dragOver ? T.accent : T.border2}`,
+                      border: `2px dashed ${dragOver ? T.accent : T.border}`,
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
                       margin: '0 auto 16px', transition: 'all 0.15s ease',
                     }}>
@@ -260,7 +342,7 @@ export default function Upload() {
                   <div style={{ display: 'flex', alignItems: 'center', gap: '13px', justifyContent: 'space-between' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                       <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: T.accentBg, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        <FileAudio size={18} color={T.accentLight} />
+                        <FileAudio size={18} color={T.accent} />
                       </div>
                       <div style={{ textAlign: 'left' }}>
                         <div style={{ fontSize: '14px', fontWeight: 600, color: T.text, marginBottom: '2px' }}>{file.name}</div>
@@ -312,13 +394,15 @@ export default function Upload() {
                 placeholder="https://www.youtube.com/watch?v=..."
                 style={{
                   width: '100%', padding: '11px 14px', borderRadius: '10px',
-                  border: `1px solid ${ytUrl ? T.borderFocus : T.inputBorder}`,
-                  background: T.inputBg, color: T.text, fontSize: '14px', outline: 'none',
-                  marginBottom: '16px', transition: 'border-color 0.15s ease',
-                  boxShadow: ytUrl ? `0 0 0 3px ${T.accentBg}` : 'none',
+                  border: `1px solid ${T.border}`,
+                  background: T.surface2, color: T.text,
+                  fontSize: '14px', outline: 'none',
+                  marginBottom: '16px',
                   fontFamily: 'var(--font)',
                   boxSizing: 'border-box',
                 }}
+                onFocus={e => e.target.style.borderColor = T.accent}
+                onBlur={e  => e.target.style.borderColor = T.border}
               />
 
               <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
@@ -330,7 +414,7 @@ export default function Upload() {
           </div>
         )}
 
-        {/* ── Error banner ── */}
+        {/* Error banner */}
         {error && (
           <div className="anim-fade-up" style={{
             display: 'flex', alignItems: 'flex-start', gap: '10px',
@@ -345,7 +429,7 @@ export default function Upload() {
 
         <Divider />
 
-        {/* ── Supported formats ── */}
+        {/* Supported formats */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
           {[
             { icon: <FileAudio size={16} color={T.blueText} />,  bg: T.blueBg,   label: 'Audio Files', formats: 'MP3, WAV, M4A, AAC, FLAC' },

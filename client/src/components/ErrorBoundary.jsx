@@ -140,13 +140,13 @@ export default class ErrorBoundary extends Component {
               padding:      '9px 18px',
               borderRadius: '10px',
               border:       'none',
-              background:   'linear-gradient(135deg, #6366f1, #a855f7)',
+              background:   '#059669',
               color:        'white',
               fontSize:     '13.5px',
               fontWeight:   600,
               cursor:       'pointer',
               fontFamily:   'inherit',
-              boxShadow:    '0 4px 14px rgba(99,102,241,0.35)',
+              boxShadow:    '0 4px 14px rgba(5,150,105,0.30)',
             }}
           >
             Reload page

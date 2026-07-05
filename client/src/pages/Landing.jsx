@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Mic, Zap, CheckSquare, FileText,
+  Zap, CheckSquare, FileText,
   MessageSquare, BarChart2, Upload,
   ChevronDown, ChevronUp, ArrowRight,
   Shield, Clock, Search, Star,
@@ -221,7 +221,7 @@ export default function Landing() {
   ]
 
   return (
-    <div style={{
+    <div className="page-enter" style={{
       background: T.bg, minHeight: '100vh',
       transition: 'background 0.18s ease',
     }}>
@@ -243,7 +243,7 @@ export default function Landing() {
           top: '20%', left: '50%',
           transform: 'translateX(-50%)',
           width: '600px', height: '400px',
-          background: `radial-gradient(ellipse, ${T.accent}18 0%, transparent 70%)`,
+          background: isDark ? 'radial-gradient(ellipse, rgba(16,185,129,0.12) 0%, transparent 70%)' : 'radial-gradient(ellipse, rgba(5,150,105,0.08) 0%, transparent 70%)',
           pointerEvents: 'none',
         }} />
 
@@ -326,14 +326,16 @@ export default function Landing() {
                   onClick={() => navigate('/register')}
                   style={{
                     padding: '14px 32px', borderRadius: '12px',
-                    background: T.btnGrad, border: 'none',
+                    background: isDark ? '#10b981' : '#059669',
+                  border: 'none',
                     color: '#fff', fontSize: '16px', fontWeight: 700,
-                    cursor: 'pointer', boxShadow: T.btnShadow,
+                    cursor: 'pointer',
+                    boxShadow: '0 4px 20px rgba(16,185,129,0.32)',
                     display: 'flex', alignItems: 'center', gap: '8px',
                     transition: 'all 0.15s ease', fontFamily: 'var(--font)',
                   }}
-                  onMouseEnter={e => e.currentTarget.style.transform = 'translateY(-2px)'}
-                  onMouseLeave={e => e.currentTarget.style.transform = 'none'}
+                  onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 6px 28px rgba(16,185,129,0.44)' }}
+                  onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = '0 4px 20px rgba(16,185,129,0.32)' }}
                 >
                   Get Started Free <ArrowRight size={18} />
                 </button>
@@ -503,7 +505,8 @@ export default function Landing() {
           </div>
 
           <div style={{
-            display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)',
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
             gap: '24px',
           }}>
             {[
@@ -578,9 +581,9 @@ export default function Landing() {
               onClick={() => navigate('/demo')}
               style={{
                 padding: '13px 32px', borderRadius: '12px',
-                background: T.btnGrad, border: 'none',
+                background: isDark ? '#10b981' : '#059669', border: 'none',
                 color: '#fff', fontSize: '15px', fontWeight: 700,
-                cursor: 'pointer', boxShadow: T.btnShadow,
+                cursor: 'pointer', boxShadow: '0 4px 16px rgba(16,185,129,0.30)',
                 display: 'inline-flex', alignItems: 'center', gap: '9px',
                 transition: 'all 0.15s ease', fontFamily: 'var(--font)',
               }}
@@ -650,9 +653,9 @@ export default function Landing() {
               onClick={() => navigate('/register')}
               style={{
                 padding: '15px 40px', borderRadius: '13px',
-                background: T.btnGrad, border: 'none',
+                background: isDark ? '#10b981' : '#059669', border: 'none',
                 color: '#fff', fontSize: '17px', fontWeight: 700,
-                cursor: 'pointer', boxShadow: T.btnShadow,
+                cursor: 'pointer', boxShadow: '0 4px 20px rgba(16,185,129,0.32)',
                 display: 'inline-flex', alignItems: 'center', gap: '9px',
                 transition: 'all 0.15s ease', fontFamily: 'var(--font)',
               }}
@@ -713,15 +716,22 @@ export default function Landing() {
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <div style={{
-              width: '30px', height: '30px', borderRadius: '8px',
-              background: T.btnGrad,
+              width: 30, height: 30, borderRadius: '8px',
+              background: isDark ? '#1A1A1D' : '#EBEBEA',
+              border: `1px solid ${isDark ? '#2A2A2E' : '#D8D8D4'}`,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
             }}>
-              <Mic size={15} color="#fff" />
+              <span style={{
+                fontSize: '14px', fontWeight: 800,
+                color: isDark ? '#10b981' : '#059669',
+                letterSpacing: '-0.06em', lineHeight: 1,
+                fontFamily: 'Inter, sans-serif',
+              }}>S</span>
             </div>
             <span style={{
               fontSize: '16px', fontWeight: 800,
-              letterSpacing: '-0.04em', color: T.text,
+              letterSpacing: '-0.05em', color: T.text,
+              fontFamily: 'Inter, sans-serif',
             }}>
               Summly
             </span>
