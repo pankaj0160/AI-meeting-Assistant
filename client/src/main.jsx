@@ -10,6 +10,11 @@ import { WorkspaceProvider } from './context/WorkspaceContext'
 import ErrorBoundary from './components/ErrorBoundary'
 import { ToastProvider } from './components/Toast'
 import { CommandPaletteProvider } from './components/CommandPalette'
+import { initSentry } from './lib/sentry'
+
+// PHASE 1: error monitoring. No-op if VITE_SENTRY_DSN isn't set (see
+// src/lib/sentry.js) — safe to call unconditionally on every app start.
+initSentry()
 
 // FIX: Wrap the entire app in an ErrorBoundary.
 //

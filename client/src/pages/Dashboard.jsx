@@ -19,6 +19,7 @@ import {
 } from 'lucide-react'
 import { useTheme } from '../ThemeContext'
 import { StatCard, Card, EmptyState, Skeleton } from '../components/ui'
+import OnboardingChecklist from '../components/OnboardingChecklist'
 import { useResponsiveGrid } from '../hooks/useResponsiveGrid'
 import { useToast } from '../components/Toast'
 
@@ -535,6 +536,17 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {/* PHASE 2 (B1): Getting started checklist — only shows for new
+          users, self-dismisses once they've graduated past it (see
+          OnboardingChecklist for the exact conditions). */}
+      {!loading && (
+        <OnboardingChecklist
+          meetingsCount={stats?.total_meetings ?? 0}
+          insightsCount={(stats?.total_decisions ?? 0) + (stats?.total_actions ?? 0) + (stats?.total_topics ?? 0)}
+          userId={user?.id}
+        />
+      )}
 
       {/* ── Stat Cards ───────────────────────────────────────── */}
       <div style={{

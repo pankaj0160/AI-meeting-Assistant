@@ -7,6 +7,38 @@ Phase 2 Complete with Meeting Intelligence Engine
 from server.core.logging_config import setup_logging
 setup_logging()
 
+# ── Error monitoring (Sentry) — PHASE 1 ────────────────────────────────────────
+# Same graceful-degradation pattern as everything else in this file (see the
+# slowapi import guard below): if sentry-sdk isn't installed, or SENTRY_DSN
+# isn't set, the server starts up exactly as before — this is a monitoring
+# addition, never a startup requirement.
+import os as _os
+_SENTRY_DSN = _os.getenv("SENTRY_DSN", "").strip()
+try:
+    if _SENTRY_DSN:
+        import sentry_sdk
+        from sentry_sdk.integrations.fastapi import FastApiIntegration
+        from sentry_sdk.integrations.starlette import StarletteIntegration
+        sentry_sdk.init(
+            dsn=_SENTRY_DSN,
+            integrations=[StarletteIntegration(), FastApiIntegration()],
+            # traces_sample_rate: fraction of requests to trace for performance
+            # monitoring. 0.1 = 10% — enough signal without flooding Sentry's
+            # quota. Raise while debugging, lower once traffic grows.
+            traces_sample_rate=float(_os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.1")),
+            environment=_os.getenv("ENVIRONMENT", "development"),
+            # Don't send request bodies/headers by default — meeting content
+            # and auth tokens could end up in them.
+            send_default_pii=False,
+        )
+        _SENTRY_ENABLED = True
+    else:
+        _SENTRY_ENABLED = False
+except ImportError:
+    # sentry-sdk not installed — server still works, errors just aren't
+    # forwarded anywhere. Install with: pip install sentry-sdk[fastapi]
+    _SENTRY_ENABLED = False
+
 try:
     import structlog
     mlog = structlog.get_logger("server.main")
@@ -140,6 +172,7 @@ from server.core.database import (
     get_meetings_page,         # FIX: paginated meetings list
     get_tasks_page,            # FIX: paginated tasks list
     get_analytics_data,        # Analytics page — single query
+    get_commitment_reliability, # PHASE 2 — dashboard widget, standalone
     save_transcript_and_get_id,
     save_meeting_intelligence,
     get_meeting_intelligence,
@@ -631,6 +664,23 @@ def get_analytics(current_user: User = Depends(get_current_user)):
 @app.get("/tasks/stats", tags=["Action Items"])
 def get_task_stats(current_user: User = Depends(get_current_user)):
     return get_action_item_stats(user_id=current_user.id)
+
+
+@app.get("/commitments/reliability", tags=["Action Items"])
+def get_reliability(current_user: User = Depends(get_current_user)):
+    """
+    PHASE 2 — headline feature. Per-person commitment reliability:
+    "this person follows through on X% of what they say they'll do."
+
+    Separate from /analytics so a small dashboard widget can call this
+    directly without paying for the other 5 queries in the full
+    analytics payload — see get_commitment_reliability in database.py.
+    """
+    try:
+        return {"people": get_commitment_reliability(user_id=current_user.id)}
+    except Exception as e:
+        logger.error(f"Commitment reliability failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to load commitment reliability")
 
 
 @app.patch("/tasks/{item_id}", tags=["Action Items"])
@@ -3300,6 +3350,21 @@ async def global_exception_handler(request, exc):
             content={"error": exc.detail, "status_code": exc.status_code},
         )
     traceback.print_exc()
+
+    # PHASE 1: forward unhandled 500s to Sentry.
+    # This is done EXPLICITLY here (not left to Sentry's ASGI middleware alone)
+    # because this handler already intercepts every unhandled exception before
+    # it would otherwise propagate — being explicit guarantees delivery
+    # regardless of SDK/middleware ordering, instead of hoping auto-capture
+    # fires in a handler that already caught the exception.
+    if _SENTRY_ENABLED:
+        try:
+            import sentry_sdk
+            sentry_sdk.capture_exception(exc)
+        except Exception:
+            # Never let Sentry reporting itself cause a request to fail.
+            pass
+
     return JSONResponse(
         status_code=500,
         content={"error": str(exc), "status_code": 500},

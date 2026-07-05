@@ -179,6 +179,22 @@ def init_db():
             )
         """)
 
+        # PHASE 2 — commitment tracking migration.
+        # CREATE TABLE IF NOT EXISTS above is a no-op on an existing table,
+        # so new columns on an already-deployed action_items table need an
+        # explicit, idempotent ALTER TABLE. Safe to run on every startup —
+        # ADD COLUMN IF NOT EXISTS is a no-op once the column exists.
+        #   due_date:     the parsed, actual date behind `deadline`'s free
+        #                 text (see core/deadline_parser.py). NULL when the
+        #                 text couldn't be parsed — "overdue"/"reliability"
+        #                 math simply skips items with no due_date rather
+        #                 than guessing.
+        #   completed_at: stamped when status is set to 'done'. Needed to
+        #                 tell "done on time" apart from "done late" for
+        #                 the commitment reliability score.
+        cur.execute("ALTER TABLE action_items ADD COLUMN IF NOT EXISTS due_date DATE")
+        cur.execute("ALTER TABLE action_items ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ")
+
         cur.execute("""
             CREATE TABLE IF NOT EXISTS decisions (
                 id         SERIAL PRIMARY KEY,
@@ -394,13 +410,113 @@ def get_analytics_data(user_id: int) -> dict:
         """, (user_id,))
         health_trend = [dict(r) for r in reversed(cur.fetchall())]
 
+        # 6 — PHASE 2: commitment reliability per person (headline feature).
+        # Extracted into its own function (see get_commitment_reliability
+        # below) so a lightweight dashboard widget can call it directly
+        # without paying for the other 5 queries in this function.
+        commitment_reliability = get_commitment_reliability(user_id, _cur=cur)
+
     return {
         "totals":       totals,
         "weekly_trend": weekly_trend,
         "task_status":  task_status,
         "top_topics":   top_topics,
         "health_trend": health_trend,
+        "commitment_reliability": commitment_reliability,
     }
+
+
+def get_commitment_reliability(user_id: int, _cur=None) -> list[dict]:
+    """
+    PHASE 2 — headline differentiator feature.
+
+    Computes, per person, whether they follow through on commitments ON
+    TIME across every meeting they've been assigned an action item in —
+    not just whether it eventually got done.
+
+    Definitions (see core/deadline_parser.py for how due_date is populated):
+      done_on_time — marked done, and either no due_date was parseable
+                     or it was completed on/before that date
+      done_late    — marked done, but after its due_date had passed
+      missed       — still open/in_progress and due_date has passed
+      open_not_due — still open/in_progress but not yet due (or no
+                     due_date at all) — excluded from reliability math
+                     entirely, since nothing has been resolved yet
+
+    reliability_pct = done_on_time / (done_on_time + done_late + missed)
+    Only counts RESOLVED commitments — an item that's simply still
+    pending doesn't count for or against anyone yet.
+
+    Owners are grouped case-insensitively (LOWER(TRIM(...))) since the LLM
+    extracts names as spoken — "Pankaj" vs "pankaj" vs " Pankaj " would
+    otherwise be treated as different people. The most recently used
+    casing is kept for display via array_agg ordered by meeting date.
+
+    Args:
+        _cur: internal — lets get_analytics_data reuse an open cursor
+              instead of opening a second connection. Callers outside
+              this module should never pass this.
+    """
+    owns_connection = _cur is None
+    conn = get_connection() if owns_connection else None
+    try:
+        cur = _cur if _cur is not None else conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        cur.execute("""
+            SELECT
+                (array_agg(ai.owner ORDER BY m.created_at DESC))[1] AS owner,
+                COUNT(*) FILTER (
+                    WHERE ai.status = 'done'
+                      AND (ai.due_date IS NULL OR ai.completed_at IS NULL
+                           OR ai.completed_at::date <= ai.due_date)
+                ) AS done_on_time,
+                COUNT(*) FILTER (
+                    WHERE ai.status = 'done'
+                      AND ai.due_date IS NOT NULL AND ai.completed_at IS NOT NULL
+                      AND ai.completed_at::date > ai.due_date
+                ) AS done_late,
+                COUNT(*) FILTER (
+                    WHERE ai.status IN ('open', 'in_progress')
+                      AND ai.due_date IS NOT NULL AND ai.due_date < CURRENT_DATE
+                ) AS missed,
+                COUNT(*) FILTER (
+                    WHERE ai.status IN ('open', 'in_progress')
+                      AND (ai.due_date IS NULL OR ai.due_date >= CURRENT_DATE)
+                ) AS open_not_due,
+                COUNT(*) AS total,
+                MAX(m.created_at) AS last_commitment_at
+            FROM action_items ai
+            JOIN meetings m ON m.id = ai.meeting_id
+            WHERE m.user_id = %s
+              AND ai.owner IS NOT NULL AND TRIM(ai.owner) != ''
+            GROUP BY LOWER(TRIM(ai.owner))
+            ORDER BY total DESC
+        """, (user_id,))
+
+        results = []
+        for r in cur.fetchall():
+            done_on_time = r["done_on_time"]
+            done_late    = r["done_late"]
+            missed       = r["missed"]
+            resolved = done_on_time + done_late + missed
+            results.append({
+                "owner":              r["owner"],
+                "reliability_pct":    round(done_on_time / resolved * 100) if resolved > 0 else None,
+                "done_on_time":       done_on_time,
+                "done_late":          done_late,
+                "missed":             missed,
+                "open_not_due":       r["open_not_due"],
+                "resolved_count":     resolved,
+                "total_commitments":  r["total"],
+                # Below this, a single miss/hit swings the percentage
+                # wildly — surface that instead of a misleadingly precise number.
+                "has_enough_data":    resolved >= 3,
+                "last_commitment_at": r["last_commitment_at"].isoformat() if r["last_commitment_at"] else None,
+            })
+        return results
+    finally:
+        if owns_connection and conn is not None:
+            conn.close()
 
 
 # =============================================================================
@@ -547,8 +663,17 @@ def get_tasks_page(
         conditions.append("ai.id < %s")
         params.append(cursor)
     if status:
-        conditions.append("ai.status = %s")
-        params.append(status.lower())
+        status = status.lower()
+        if status == "overdue":
+            # PHASE 2: 'overdue' is never actually stored in ai.status
+            # (see display_status below) — it's derived from due_date at
+            # read time, so filtering on it needs the same condition.
+            conditions.append(
+                "(ai.status IN ('open', 'in_progress') AND ai.due_date IS NOT NULL AND ai.due_date < CURRENT_DATE)"
+            )
+        else:
+            conditions.append("ai.status = %s")
+            params.append(status)
     if priority:
         conditions.append("ai.priority = %s")
         params.append(priority.lower())
@@ -564,8 +689,20 @@ def get_tasks_page(
         cur.execute(
             f"""
             SELECT ai.id, ai.task, ai.status, ai.owner,
-                   ai.deadline, ai.priority, ai.meeting_id,
-                   m.filename AS meeting_filename
+                   ai.deadline, ai.priority, ai.meeting_id, ai.due_date,
+                   m.filename AS meeting_filename,
+                   -- PHASE 2: overdue is DERIVED here, not a status you have
+                   -- to remember to set by hand. An item shows as overdue
+                   -- the moment its due_date passes while still open/in
+                   -- progress — no cron job, no manual step, always correct
+                   -- at read time.
+                   CASE
+                       WHEN ai.status IN ('open', 'in_progress')
+                            AND ai.due_date IS NOT NULL
+                            AND ai.due_date < CURRENT_DATE
+                       THEN 'overdue'
+                       ELSE ai.status
+                   END AS display_status
             FROM   action_items ai
             JOIN   meetings     m ON m.id = ai.meeting_id
             WHERE  {where}
@@ -782,6 +919,8 @@ def save_meeting_intelligence(meeting_id: int, intelligence) -> None:
     Saves a MeetingIntelligence Pydantic object to all four intelligence tables.
     Identical interface to the SQLite version — main.py doesn't change.
     """
+    from server.core.deadline_parser import parse_deadline
+
     with get_connection() as conn:
         cur = conn.cursor()
 
@@ -790,10 +929,29 @@ def save_meeting_intelligence(meeting_id: int, intelligence) -> None:
             (meeting_id, intelligence.summary, intelligence.generated_at),
         )
 
+        # Need the meeting's own date to anchor relative deadlines
+        # ("next Friday" means next Friday relative to when it was SAID).
+        cur.execute("SELECT created_at FROM meetings WHERE id = %s", (meeting_id,))
+        row = cur.fetchone()
+        meeting_date = row[0].date() if row and row[0] else None
+
         for item in intelligence.action_items:
+            # PHASE 2: parse the freeform deadline into an actual date.
+            # Best-effort — a parse failure must never block saving the
+            # action item itself, it just means due_date stays NULL and
+            # this item is excluded from overdue/reliability math.
+            due_date = None
+            try:
+                due_date = parse_deadline(item.deadline, reference_date=meeting_date)
+            except Exception as e:
+                logger.warning("Deadline parse failed for %r: %s", item.deadline, e)
+
             cur.execute(
-                "INSERT INTO action_items (meeting_id, task, owner, deadline, priority) VALUES (%s, %s, %s, %s, %s)",
-                (meeting_id, item.task, item.owner, item.deadline, item.priority),
+                """
+                INSERT INTO action_items (meeting_id, task, owner, deadline, priority, due_date)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (meeting_id, item.task, item.owner, item.deadline, item.priority, due_date),
             )
 
         for d in intelligence.decisions:
@@ -953,7 +1111,22 @@ def update_action_item_status(item_id: int, status: str, user_id: int) -> bool:
         )
         if not cur.fetchone():
             return False
-        cur.execute("UPDATE action_items SET status = %s WHERE id = %s", (status, item_id))
+
+        # PHASE 2: stamp completed_at when marking done, so we can later
+        # tell "done on time" apart from "done late" (see
+        # get_commitment_reliability). Clear it if the item is reopened —
+        # otherwise reopening and re-completing later would keep the
+        # original timestamp and silently corrupt the reliability score.
+        if status == "done":
+            cur.execute(
+                "UPDATE action_items SET status = %s, completed_at = NOW() WHERE id = %s",
+                (status, item_id),
+            )
+        else:
+            cur.execute(
+                "UPDATE action_items SET status = %s, completed_at = NULL WHERE id = %s",
+                (status, item_id),
+            )
     return True
 
 
@@ -1012,17 +1185,41 @@ def update_action_item_fields(
     if "status" in fields and fields["status"] not in {"open", "in_progress", "done", "overdue"}:
         raise ValueError(f"status must be open/in_progress/done/overdue, got: {fields['status']}")
 
+    # PHASE 2: keep completed_at in sync whenever status is patched here too
+    # (not just via the dedicated /status endpoint) — see
+    # update_action_item_status for why this matters for reliability scoring.
+    if "status" in fields:
+        fields["completed_at"] = "NOW()" if fields["status"] == "done" else None
+
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(
-            "SELECT ai.id FROM action_items ai JOIN meetings m ON m.id = ai.meeting_id WHERE ai.id = %s AND m.user_id = %s",
+            "SELECT ai.id, m.created_at FROM action_items ai JOIN meetings m ON m.id = ai.meeting_id WHERE ai.id = %s AND m.user_id = %s",
             (item_id, user_id),
         )
-        if not cur.fetchone():
+        row = cur.fetchone()
+        if not row:
             return False
 
-        set_clause = ", ".join(f"{col} = %s" for col in fields)
-        cur.execute(f"UPDATE action_items SET {set_clause} WHERE id = %s", [*fields.values(), item_id])
+        # PHASE 2: if the deadline text is being edited, re-parse due_date
+        # too, anchored to this item's own meeting date — otherwise editing
+        # "next Friday" to "next Monday" would silently leave the OLD
+        # parsed due_date in place and corrupt overdue/reliability math.
+        if "deadline" in fields:
+            from server.core.deadline_parser import parse_deadline
+            meeting_date = row[1].date() if row[1] else None
+            fields["due_date"] = parse_deadline(fields["deadline"], reference_date=meeting_date)
+
+        set_parts = []
+        values = []
+        for col, val in fields.items():
+            if col == "completed_at" and val == "NOW()":
+                set_parts.append("completed_at = NOW()")
+            else:
+                set_parts.append(f"{col} = %s")
+                values.append(val)
+        values.append(item_id)
+        cur.execute(f"UPDATE action_items SET {', '.join(set_parts)} WHERE id = %s", values)
     return True
 
 
@@ -1042,11 +1239,25 @@ def delete_action_item(item_id: int, user_id: int) -> bool:
 def get_action_item_stats(user_id: int) -> dict:
     with get_connection() as conn:
         cur = conn.cursor()
+        # PHASE 2: 'overdue' derived from due_date, same logic as
+        # get_tasks_page — this used to GROUP BY the raw status column,
+        # but nothing ever actually set status='overdue', so the overdue
+        # count was always silently zero.
         cur.execute(
             """
-            SELECT ai.status, COUNT(*) FROM action_items ai
+            SELECT
+                CASE
+                    WHEN ai.status IN ('open', 'in_progress')
+                         AND ai.due_date IS NOT NULL
+                         AND ai.due_date < CURRENT_DATE
+                    THEN 'overdue'
+                    ELSE ai.status
+                END AS display_status,
+                COUNT(*)
+            FROM action_items ai
             JOIN meetings m ON m.id = ai.meeting_id
-            WHERE m.user_id = %s GROUP BY ai.status
+            WHERE m.user_id = %s
+            GROUP BY display_status
             """,
             (user_id,),
         )

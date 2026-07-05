@@ -259,3 +259,6 @@ supabase==2.15.1
 psycopg2-binary==2.9.10
 slowapi==0.1.9
 structlog==24.4.0
+
+
+sentry-sdk[fastapi]>=2.10.0   # error monitoring — see main.py Sentry init

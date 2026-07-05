@@ -60,7 +60,7 @@ export default function ForgotPassword() {
             fontSize: '14px', color: T.text3,
             margin: '0 0 24px', lineHeight: 1.5,
           }}>
-            Enter your email address and we'll send you a reset token.
+            Enter your email address and we'll send you a link to reset your password.
           </p>
 
           {error && (

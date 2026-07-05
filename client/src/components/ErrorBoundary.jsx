@@ -21,6 +21,7 @@
 //   The rest of the app (sidebar, navbar) keeps working normally.
 
 import { Component } from 'react'
+import { captureException } from '../lib/sentry'
 
 export default class ErrorBoundary extends Component {
   constructor(props) {
@@ -44,8 +45,9 @@ export default class ErrorBoundary extends Component {
     // Very useful for debugging — shows exactly which component crashed
     console.error('[ErrorBoundary] Caught error:', error)
     console.error('[ErrorBoundary] Component stack:', info.componentStack)
-    // TODO: send to your error monitoring service here
-    // e.g. Sentry.captureException(error, { extra: info })
+    // PHASE 1: forward to Sentry. No-op if VITE_SENTRY_DSN isn't set,
+    // so this is always safe to call.
+    captureException(error, { extra: { componentStack: info.componentStack } })
   }
 
   handleReset() {

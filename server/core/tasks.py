@@ -314,6 +314,24 @@ def process_meeting_task(
         # ── Step 6: Done ───────────────────────────────────────────────────
         update("done", "Processing complete!", 100, meeting_id=meeting_id)
         logger.info("[Job %s] Pipeline complete for meeting %d", job_id, meeting_id)
+
+        # PHASE 1: notify the user their meeting is ready. Best-effort and
+        # NEVER allowed to fail the task — this runs after everything the
+        # user actually needs (meeting_id, intelligence, index) is already
+        # saved, so an email failure here must not mark a successful
+        # pipeline run as failed in Celery.
+        try:
+            from server.core.auth.service import get_user_by_id
+            from server.core.email import send_meeting_ready_email
+            user = get_user_by_id(user_id)
+            if user and getattr(user, "email", None):
+                send_meeting_ready_email(user.email, filename, str(meeting_id))
+        except Exception as e:
+            logger.warning(
+                "[Job %s] Meeting-ready email failed (non-fatal): %s",
+                job_id, e,
+            )
+
         return {"meeting_id": meeting_id, "status": "done"}
 
     except Exception as e:

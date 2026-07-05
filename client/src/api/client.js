@@ -268,6 +268,12 @@ export async function getAnalytics() {
   return request('/analytics')
 }
 
+// PHASE 2 — commitment reliability widget. Lighter than getAnalytics()
+// when only this data is needed (e.g. a standalone Dashboard widget).
+export async function getCommitmentReliability() {
+  return request('/commitments/reliability')
+}
+
 // ── Health check ──────────────────────────────────────────────────────────────
 
 export async function getHealth() {

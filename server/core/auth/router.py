@@ -4,7 +4,7 @@
 import logging
 import traceback
 
-from fastapi import APIRouter, HTTPException, Depends, status, Request
+from fastapi import APIRouter, HTTPException, Depends, status, Request, BackgroundTasks
 
 try:
     from slowapi import Limiter
@@ -32,6 +32,7 @@ from server.core.auth.service import (
 )
 from server.core.auth.dependencies import get_current_user
 from server.core.auth.models import User
+from server.core.email import send_reset_email, send_welcome_email
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 limiter = Limiter(key_func=get_remote_address)
@@ -58,7 +59,7 @@ def _to_public(user: User) -> UserPublic:
 
 @router.post("/register", response_model=AuthResponse, status_code=201)
 @limiter.limit("5/minute")
-def register(request: Request, body: RegisterRequest):
+def register(request: Request, body: RegisterRequest, background_tasks: BackgroundTasks):
     try:
         user = create_user(
             full_name=body.full_name,
@@ -74,6 +75,12 @@ def register(request: Request, body: RegisterRequest):
     token = create_access_token(user.id, user.email)
     # FIX: log with logger (not print) — no sensitive data in the message
     logger.info("New user registered: id=%s", user.id)
+
+    # PHASE 1: welcome email, sent via BackgroundTasks so a slow/down email
+    # provider (Resend) never adds latency to the register response or
+    # blocks account creation. Runs after the response is sent to the client.
+    background_tasks.add_task(send_welcome_email, user.email, user.full_name)
+
     return AuthResponse(access_token=token, user=_to_public(user))
 
 
@@ -146,7 +153,7 @@ def change_password(
 
 @router.post("/forgot-password", response_model=MessageResponse)
 @limiter.limit("3/minute")
-def forgot_password(request: Request, body: ForgotPasswordRequest):
+def forgot_password(request: Request, body: ForgotPasswordRequest, background_tasks: BackgroundTasks):
     # FIX: Critical security bug — the old code returned the reset token
     # directly in the API response:
     #   return MessageResponse(message=f"Reset token generated. Token: {token}")
@@ -158,21 +165,24 @@ def forgot_password(request: Request, body: ForgotPasswordRequest):
     #      → account taken over. No email access needed.
     #
     # The fix: call create_reset_token() but NEVER return the token in the
-    # response. In production this function should email the token to the user.
+    # response. The token is emailed to the user instead (PHASE 1).
     # The response always says the same thing whether the email exists or not
     # — this prevents "email enumeration" (finding out which emails are registered).
 
     token = create_reset_token(body.email)
 
     if token:
-        # TODO: send token via email here using your email service
-        # e.g. send_reset_email(body.email, token)
-        # For now we log it at WARNING level so you can find it in server logs
-        # during development — remove this log line once email is wired up.
-        logger.warning(
-            "Password reset token created for email (dev only — wire up email): %s",
-            body.email
-        )
+        # PHASE 1 FIX: token is now actually delivered — previously this only
+        # logged a WARNING with the token and never sent anything, so a real
+        # user who forgot their password had no way to get back in.
+        #
+        # BackgroundTasks matters here specifically: this endpoint is
+        # rate-limited to 3/minute and must respond in constant-ish time
+        # regardless of whether the email succeeds, so a slow Resend call
+        # can't be used to distinguish "email exists" (slower) from
+        # "email doesn't exist" (instant) via response timing.
+        background_tasks.add_task(send_reset_email, body.email, token)
+        logger.info("Password reset requested — email queued")
 
     # FIX: always return the same message — never reveal whether the email exists.
     # If we said "email not found" when the email doesn't exist, attackers could

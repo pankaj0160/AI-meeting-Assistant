@@ -18,6 +18,7 @@ import {
 import { useTheme } from '../ThemeContext'
 import { getAnalytics } from '../api/client'
 import { PageHeader, Card, StatCard, EmptyState, Skeleton } from '../components/ui'
+import CommitmentReliability from '../components/CommitmentReliability'
 import { useResponsiveGrid } from '../hooks/useResponsiveGrid'
 
 // ── Custom Tooltip ────────────────────────────────────────────────────────────
@@ -107,7 +108,7 @@ export default function Analytics() {
     </div>
   )
 
-  const { totals, weekly_trend, task_status, top_topics, health_trend } = data
+  const { totals, weekly_trend, task_status, top_topics, health_trend, commitment_reliability } = data
 
   // ── Chart data helpers ─────────────────────────────────────────────────────
 
@@ -340,6 +341,19 @@ export default function Analytics() {
         </ChartCard>
 
       </div>
+
+      {/* ── PHASE 2: Commitment Reliability — headline differentiator ── */}
+      <Card style={{ padding: '24px', marginBottom: '16px' }}>
+        <div style={{ marginBottom: '16px' }}>
+          <div style={{ fontSize: '15px', fontWeight: 700, color: T.text, letterSpacing: '-0.02em' }}>
+            Commitment Reliability
+          </div>
+          <div style={{ fontSize: '12px', color: T.text3, marginTop: '3px' }}>
+            Who follows through on what they say — computed across every meeting, not just this one.
+          </div>
+        </div>
+        <CommitmentReliability people={commitment_reliability} />
+      </Card>
 
       {/* ── Summary row ── */}
       <Card>

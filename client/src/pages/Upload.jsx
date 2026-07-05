@@ -31,7 +31,8 @@ import {
 import { useTheme }                       from '../ThemeContext'
 import { useUploadProgress, STEPS }       from '../hooks/useUploadProgress'
 import { PageHeader, Card, Button, Divider } from '../components/ui'
-import { getToken, getApiBase }           from '../api/client'
+import ProcessingCompleteReveal              from '../components/ProcessingCompleteReveal'
+import { getToken, getApiBase, getMeetingIntelligence } from '../api/client'
 import { useToast }                       from '../components/Toast'
 
 const AUDIO_EXTS = ['mp3', 'wav', 'm4a', 'aac', 'flac']
@@ -134,6 +135,36 @@ export default function Upload() {
   const [ytUrl,    setYtUrl]    = useState('')
   const [tab,      setTab]      = useState('file')
   const [error,    setError]    = useState(null)
+  // PHASE 2 (B3): holds the preview data for the "wow moment" reveal once
+  // processing finishes — null means "not showing the reveal."
+  const [reveal,   setReveal]   = useState(null)
+  // Stored separately from `reveal` itself so the reveal object can stay
+  // simple, serializable preview data rather than holding a function.
+  const [revealContinue, setRevealContinue] = useState(() => () => {})
+
+  // PHASE 2 (B3): shared by both the file and YouTube handlers. Fetches a
+  // quick preview of what was extracted and shows the celebratory reveal
+  // screen instead of silently navigating away the instant the POST
+  // resolves. Best-effort — if the preview fetch fails for any reason,
+  // this falls back to the old behavior (navigate straight there) rather
+  // than leaving the user stuck looking at nothing.
+  const showRevealThenNavigate = async (meetingId) => {
+    try {
+      const intel = await getMeetingIntelligence(meetingId)
+      setReveal({
+        summary:   intel?.summary,
+        decisions: intel?.decisions?.length ?? 0,
+        actions:   intel?.action_items?.length ?? 0,
+        topics:    intel?.topics?.length ?? 0,
+      })
+      // Reveal component calls this back either on click or auto-advance.
+      setRevealContinue(() => () => navigate(`/app/meetings/${meetingId}`))
+    } catch {
+      // No intelligence yet, or the fetch failed — skip the reveal
+      // entirely rather than showing a broken/empty version of it.
+      navigate(`/app/meetings/${meetingId}`)
+    }
+  }
 
   const validateAndSetFile = (f) => {
     const ext = f.name.split('.').pop().toLowerCase()
@@ -185,7 +216,9 @@ export default function Upload() {
       prog.complete(meetingId)
       toast.success('Upload complete', 'AI analysis is ready.')
       await new Promise(r => setTimeout(r, 900))
-      navigate(`/app/meetings/${meetingId}`)
+      // PHASE 2 (B3): show the wow-moment reveal instead of navigating
+      // straight to MeetingDetail — see showRevealThenNavigate above.
+      await showRevealThenNavigate(meetingId)
 
     } catch (e) {
       prog.fail(e.message)
@@ -229,7 +262,8 @@ export default function Upload() {
       prog.complete(meetingId)
       toast.success('Upload complete', 'AI analysis is ready.')
       await new Promise(r => setTimeout(r, 900))
-      navigate(`/app/meetings/${meetingId}`)
+      // PHASE 2 (B3): same wow-moment reveal as the file upload path.
+      await showRevealThenNavigate(meetingId)
 
     } catch (e) {
       prog.fail(e.message)
@@ -257,6 +291,18 @@ export default function Upload() {
           step={prog.step}
           message={prog.message}
           T={T}
+        />
+      )}
+
+      {/* PHASE 2 (B3): the wow-moment reveal, shown after processing
+          finishes and before navigating to the full meeting page. */}
+      {reveal && (
+        <ProcessingCompleteReveal
+          summary={reveal.summary}
+          decisions={reveal.decisions}
+          actions={reveal.actions}
+          topics={reveal.topics}
+          onContinue={revealContinue}
         />
       )}
 
