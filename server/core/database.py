@@ -2042,6 +2042,8 @@ def get_sentiment_analysis(meeting_id: int) -> dict | None:
     if not row:
         return None
  
+ # hello
+
     # PostgreSQL returns JSONB as a Python dict already — no json.loads needed
     result = row[0]
     if isinstance(result, str):
