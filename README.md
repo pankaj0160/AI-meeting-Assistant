@@ -185,15 +185,10 @@ pytest server/tests/
 - **Row Level Security** — enabled on every table to close Supabase's auto-exposed PostgREST API surface, in addition to the app's own ownership checks.
 - **Fail loud, not silent** — missing secrets, misconfigured rate limiting, or a disabled monitoring dependency all log clearly and degrade visibly rather than failing silently.
 
----
-
-## License
-
-This project is currently unlicensed / all rights reserved. *(Update this if you decide to open-source it — MIT is the common choice for portfolio projects.)*
 
 ---
 
 ## Author
 
-**Pankaj** — [GitHub](#) · [LinkedIn](#) · [Portfolio](#)
+**Pankaj** — [GitHub](https://github.com/pankaj0160/)
 Built as a production-grade portfolio project to explore RAG pipelines, multi-agent AI systems, and async backend architecture end to end.
