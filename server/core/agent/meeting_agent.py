@@ -48,7 +48,7 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-MODEL          = "llama-3.3-70b-versatile"
+MODEL          = "openai/gpt-oss-120b"
 MAX_ITERATIONS = 5   # Safety limit — stop after this many tool calls even if not done
 
 # ── Clients ──────────────────────────────────────────────────────────────────
